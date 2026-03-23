@@ -3,7 +3,7 @@ CC = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 
 CFLAGS = -Wall -Wextra -O0 -g -ffreestanding -nostdlib -nostartfiles
-CFLAGS += -march=rv64gc -mabi=lp64
+CFLAGS += -march=rv64gc -mabi=lp64 -mcmodel=medany
 LDFLAGS = -T linker.ld -nostdlib
 
 all: kernel.bin
