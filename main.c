@@ -1,32 +1,19 @@
-static inline long sbi_call(long ext, long fid, long arg0, long arg1, long arg2) {
-    register long a0 asm("a0") = arg0;
-    register long a1 asm("a1") = arg1;
-    register long a2 asm("a2") = arg2;
-    register long a6 asm("a6") = fid;
-    register long a7 asm("a7") = ext;
+#include "sbi.h"
 
-    asm volatile (
-        "ecall"
-        : "+r"(a0), "+r"(a1)
-        : "r"(a2), "r"(a6), "r"(a7)
-        : "memory"
-    );
-
-    return a0;
-}
-
-static void putchar(char c) {
-    sbi_call(0x1, 0, c, 0, 0);
-}
-
-static void puts(const char *s) {
-    while (*s) {
-        putchar(*s++);
-    }
-}
-
+/*
+ * kmain is the first C function entered by the kernel.
+ *
+ * At this stage, the goal is only to prove that:
+ * 1. QEMU starts the machine
+ * 2. OpenSBI transfers control to our kernel
+ * 3. _start sets up a valid stack
+ * 4. we successfully enter C code
+ *
+ * So for now kmain only prints a message and then stops in a loop.
+ * Later this will grow into trap handling, syscalls, and user mode support.
+ */
 void kmain(void) {
-    puts("Hello from my RISC-V kernel!\n");
+    print_str("Hello from my RISC-V kernel!\n");
 
     while (1) {
         asm volatile ("wfi");
