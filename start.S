@@ -14,6 +14,7 @@
  * If kmain ever returns, we stay in an infinite loop.
  */
 
+.balign 4
 _start:
     la sp, stack_top
     call kmain
