@@ -14,7 +14,7 @@ static void print_hex(unsigned long x) {
     print_str(buf);
 }
 
-void trap_handler(unsigned long scause, unsigned long sepc, unsigned long stval) {
+void trap_handler(unsigned long scause, unsigned long sepc, unsigned long stval, unsigned long user_a0, unsigned long user_a7) {
     print_str("\n[trap]\n");
 
     print_str("scause = ");
@@ -30,6 +30,12 @@ void trap_handler(unsigned long scause, unsigned long sepc, unsigned long stval)
     print_str("\n");
 
     if (scause == 8) {
+        if (user_a7 == 1) {
+            putchar((char)user_a0);
+        } else if (user_a7 == 2) {
+            print_str((const char *)user_a0);
+        }
+
         w_sepc(r_sepc() + 4);
         return;
     }
