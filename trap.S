@@ -15,14 +15,15 @@ kernel_entry:
     csrr s0, scause
     csrr s1, sepc
     csrr s2, stval
-    mv   s3, a0       # save user a0
-    mv   s4, a7       # save user a7
+    mv   s3, a0       # 保存用户 a0
+    mv   s4, a7       # 保存用户 a7
 
     mv a0, s0         # scause
     mv a1, s1         # sepc
     mv a2, s2         # stval
-    mv a3, s3         # user a0
-    mv a4, s4         # user a7
+    mv a3, s3         # 用户 a0
+    mv a4, s4         # 用户 a7
+    # 调用 trap_handler
     call trap_handler
 
     ld ra, 40(sp)
@@ -36,9 +37,12 @@ kernel_entry:
 
 .balign 4
 user_entry:
-    li a7, 2
-    la a0, msg
+    li a7, 3          # syscall 3: 返回 'Z'
     ecall
+
+    li a7, 1          # syscall 1: putchar(a0)
+    ecall
+
 1:
     j 1b
 
