@@ -17,9 +17,7 @@
 _start:
     la sp, stack_top
     call kmain
-
-1:
-    j 1b
+    j .
 
 .section .bss.stack
 .align 12

@@ -1,4 +1,5 @@
 #include "sbi.h"
+#include "riscv.h"
 
 static void print_hex(unsigned long x) {
     char hex[] = "0123456789abcdef";
@@ -27,6 +28,11 @@ void trap_handler(unsigned long scause, unsigned long sepc, unsigned long stval)
     print_str("stval  = ");
     print_hex(stval);
     print_str("\n");
+
+    if (scause == 8) {
+        w_sepc(r_sepc() + 4);
+        return;
+    }
 
     while (1) { }
 }
