@@ -1,6 +1,7 @@
 #include "syscall.h"
 
 void user_main(void) {
+    sys_printstr("hello from user c\n");
     long x = sys_add(40, 2);
     sys_putchar((char)x);
     sys_exit(0);
@@ -64,7 +65,7 @@ long sys_get_magic(void) {
 long sys_add(long x, long y) {
     return do_syscall2(SYS_ADD, x, y);
 }
-
+                        
 long sys_exit(long code) {
     return do_syscall1(SYS_EXIT, code);
 }

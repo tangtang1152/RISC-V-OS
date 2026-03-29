@@ -1,6 +1,7 @@
 #include "sbi.h"
 #include "riscv.h"
 #include "syscall.h"
+#include "trap.h"
 
 static void print_hex(unsigned long x) {
     char hex[] = "0123456789abcdef";
@@ -15,66 +16,35 @@ static void print_hex(unsigned long x) {
     print_str(buf);
 }
 
-unsigned long trap_handler(unsigned long scause, 
-                           unsigned long sepc, 
-                           unsigned long stval, 
-                           unsigned long user_a0, 
-                           unsigned long user_a1, 
-                           unsigned long user_a7) {
-    print_str("\n[trap]\n");
+void trap_handler(struct trap_frame *tf) {
+    unsigned long scause;
 
-    print_str("scause = ");
-    print_hex(scause);
-    print_str("\n");
+    asm volatile("csrr %0, scause" : "=r"(scause));
 
-    print_str("sepc   = ");
-    print_hex(sepc);
-    print_str("\n");
-
-    print_str("stval  = ");
-    print_hex(stval);
-    print_str("\n");
-
-    // scause == 8 表示触发的 ecall
     if (scause == 8) {
-        unsigned long retval = 0;
-
-        switch (user_a7) {
+        switch (tf->a7) {
             case SYS_PUTCHAR:
-                putchar((char)user_a0);
+                putchar((char)tf->a0);
                 break;
 
             case SYS_PRINTSTR:
-                print_str((const char *)user_a0);
-                break;
-
-            case SYS_GET_MAGIC:
-                retval = 'Z'; // 固定返回值 'Z'
+                print_str((const char *)tf->a0);
                 break;
 
             case SYS_ADD:
-                retval = user_a0 + user_a1;
+                tf->a0 = tf->a0 + tf->a1;
+                break;
+
+            case SYS_GET_MAGIC:
+                tf->a0 = 'Z';
                 break;
 
             case SYS_EXIT:
-                print_str("user exit, code = ");
-                print_hex(user_a0);
-                print_str("\n");
-                while (1) { }
-
-            default:
-                retval = (unsigned long)-1;  // 未知的 syscall
+                print_str("exit\n");
+                while (1) {}
                 break;
         }
 
-        // 更新 sepc，继续执行用户态的下一条指令
-        w_sepc(sepc + 4);
-        
-        // 返回值通过 a0 传递
-        return retval;
+        w_sepc(r_sepc() + 4);
     }
-
-    // 如果是其他类型的 trap，进入死循环
-        print_str("unexpected trap\n");
-    while (1) { }
 }

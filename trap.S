@@ -4,38 +4,36 @@
 
 .balign 4
 kernel_entry:
-    addi sp, sp, -64
-    sd ra, 56(sp)
-    sd s0, 48(sp)
-    sd s1, 40(sp)
-    sd s2, 32(sp)
-    sd s3, 24(sp)
-    sd s4, 16(sp)
-    sd s5, 8(sp)
+    addi sp, sp, -80
 
-    csrr s0, scause
-    csrr s1, sepc
-    csrr s2, stval
-    mv   s3, a0      # user a0
-    mv   s4, a1      # user a1
-    mv   s5, a7      # user a7
+    sd ra, 0(sp)
+    sd sp, 8(sp)        # user-mode sp
 
-    mv a0, s0
-    mv a1, s1
-    mv a2, s2
-    mv a3, s3
-    mv a4, s4
-    mv a5, s5
+    sd a0, 16(sp)
+    sd a1, 24(sp)
+    sd a2, 32(sp)
+    sd a3, 40(sp)
+    sd a4, 48(sp)
+    sd a5, 56(sp)
+    sd a6, 64(sp)
+    sd a7, 72(sp)
+
+    mv a0, sp          # a0 = trap_frame*
     call trap_handler
 
-    ld ra, 56(sp)
-    ld s0, 48(sp)
-    ld s1, 40(sp)
-    ld s2, 32(sp)
-    ld s3, 24(sp)
-    ld s4, 16(sp)
-    ld s5, 8(sp)
-    addi sp, sp, 64
+    ld ra, 0(sp)
+    ld sp, 8(sp)
+
+    ld a0, 16(sp)
+    ld a1, 24(sp)
+    ld a2, 32(sp)
+    ld a3, 40(sp)
+    ld a4, 48(sp)
+    ld a5, 56(sp)
+    ld a6, 64(sp)
+    ld a7, 72(sp)
+
+    addi sp, sp, 80
     sret
 
 .balign 4
