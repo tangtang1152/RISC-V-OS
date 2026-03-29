@@ -6,6 +6,7 @@ enum {
     SYS_PRINTSTR = 2,
     SYS_GET_MAGIC = 3,
     SYS_ADD = 4,
+    SYS_EXIT = 5
 };
 
 static void print_hex(unsigned long x) {
@@ -61,6 +62,12 @@ unsigned long trap_handler(unsigned long scause,
             case SYS_ADD:
                 retval = user_a0 + user_a1;
                 break;
+
+            case SYS_EXIT:
+                print_str("user exit, code = ");
+                print_hex(user_a0);
+                print_str("\n");
+                while (1) { }
 
             default:
                 retval = (unsigned long)-1;  // 未知的 syscall
