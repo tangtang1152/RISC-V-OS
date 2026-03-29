@@ -1,6 +1,13 @@
 #include "sbi.h"
 #include "riscv.h"
 
+enum {
+    SYS_PUTCHAR = 1,
+    SYS_PRINTSTR = 2,
+    SYS_GET_MAGIC = 3,
+    SYS_ADD = 4,
+};
+
 static void print_hex(unsigned long x) {
     char hex[] = "0123456789abcdef";
     char buf[19];
@@ -14,7 +21,12 @@ static void print_hex(unsigned long x) {
     print_str(buf);
 }
 
-unsigned long trap_handler(unsigned long scause, unsigned long sepc, unsigned long stval, unsigned long user_a0, unsigned long user_a7) {
+unsigned long trap_handler(unsigned long scause, 
+                           unsigned long sepc, 
+                           unsigned long stval, 
+                           unsigned long user_a0, 
+                           unsigned long user_a1, 
+                           unsigned long user_a7) {
     print_str("\n[trap]\n");
 
     print_str("scause = ");
@@ -34,16 +46,20 @@ unsigned long trap_handler(unsigned long scause, unsigned long sepc, unsigned lo
         unsigned long retval = 0;
 
         switch (user_a7) {
-            case 1:  // putchar
+            case SYS_PUTCHAR:
                 putchar((char)user_a0);
                 break;
 
-            case 2:  // print_str
+            case SYS_PRINTSTR:
                 print_str((const char *)user_a0);
                 break;
 
-            case 3:  // 返回一个固定值
+            case SYS_GET_MAGIC:
                 retval = 'Z'; // 固定返回值 'Z'
+                break;
+
+            case SYS_ADD:
+                retval = user_a0 + user_a1;
                 break;
 
             default:
@@ -52,12 +68,13 @@ unsigned long trap_handler(unsigned long scause, unsigned long sepc, unsigned lo
         }
 
         // 更新 sepc，继续执行用户态的下一条指令
-        w_sepc(r_sepc() + 4);
+        w_sepc(sepc + 4);
         
         // 返回值通过 a0 传递
         return retval;
     }
 
     // 如果是其他类型的 trap，进入死循环
+        print_str("unexpected trap\n");
     while (1) { }
 }
