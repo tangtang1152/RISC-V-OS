@@ -40,18 +40,7 @@ kernel_entry:
 
 .balign 4
 user_entry:
-    li a0, 48
-    li a1, 1
-    li a7, 4          # SYS_ADD
-    ecall             # a0 <- 42
-
-    li a7, 1          # SYS_PUTCHAR
-    ecall             # 打印 '*'
-
-    li a0, 0
-    li a7, 5    
-    ecall
-
+    call user_main
 1:
     j 1b
 

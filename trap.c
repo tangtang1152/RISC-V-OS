@@ -1,13 +1,6 @@
 #include "sbi.h"
 #include "riscv.h"
-
-enum {
-    SYS_PUTCHAR = 1,
-    SYS_PRINTSTR = 2,
-    SYS_GET_MAGIC = 3,
-    SYS_ADD = 4,
-    SYS_EXIT = 5
-};
+#include "syscall.h"
 
 static void print_hex(unsigned long x) {
     char hex[] = "0123456789abcdef";
