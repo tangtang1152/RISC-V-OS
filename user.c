@@ -1,9 +1,18 @@
 #include "syscall.h"
 
+long test_func() {
+    long a = 123;
+    long b = 456;
+    long c = 789;
+
+    sys_add(1,2);
+
+    return a + b + c;
+}
+
 void user_main(void) {
-    sys_printstr("hello from user c\n");
-    long x = sys_add(40, 2);
-    sys_putchar((char)x);
+    long x = test_func();
+    sys_putchar('0' + (x / 100));  // 应该输出 3
     sys_exit(0);
 }
 
