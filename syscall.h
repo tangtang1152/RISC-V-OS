@@ -12,5 +12,6 @@ long sys_printstr(const char *s);
 long sys_get_magic(void);
 long sys_add(long x, long y);
 long sys_exit(long code);
+long sys_printhex(unsigned long x);
 
 #endif

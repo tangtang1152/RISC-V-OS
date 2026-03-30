@@ -1,9 +1,21 @@
 #include "syscall.h"
 
-void user_main(void) {
-    sys_printstr("before ecall\n");
-    sys_putchar('z');
-    sys_exit(0);
+static inline unsigned long r_sp()
+{
+    unsigned long x;
+    asm volatile("mv %0, sp" : "=r"(x));
+    return x;
+}
+
+void user_main()
+{
+    unsigned long sp = r_sp();
+
+    sys_printstr("[USER] sp=");
+    sys_printhex(sp);
+    sys_printstr("\n");
+
+    sys_printstr("hello\n");
 }
 
 static inline long do_syscall0(long n) {
@@ -19,7 +31,6 @@ static inline long do_syscall0(long n) {
 
     return a0;
 }
-
 static inline long do_syscall1(long n, long x) {
     register long a0 asm("a0") = x;
     register long a7 asm("a7") = n;
@@ -33,7 +44,6 @@ static inline long do_syscall1(long n, long x) {
 
     return a0;
 }
-
 static inline long do_syscall2(long n, long x, long y) {
     register long a0 asm("a0") = x;
     register long a1 asm("a1") = y;
@@ -67,4 +77,17 @@ long sys_add(long x, long y) {
                         
 long sys_exit(long code) {
     return do_syscall1(SYS_EXIT, code);
+}
+
+long sys_printhex(unsigned long x){
+    char hex[] = "0123456789abcdef";
+    char buf[19];
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; i++) {
+        int shift = (15 - i) * 4;
+        buf[2 + i] = hex[(x >> shift) & 0xf];
+    }
+    buf[18] = '\0';
+    return do_syscall1(SYS_PRINTSTR, (long)buf);
 }

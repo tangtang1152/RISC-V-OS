@@ -25,4 +25,14 @@ static inline void w_sstatus(unsigned long x) {
     asm volatile("csrw sstatus, %0" : : "r"(x));
 }
 
+static inline void w_sp(unsigned long x){
+    asm volatile("mv sp, %0" :: "r"(x));
+}
+
+static inline unsigned long r_sp(void){
+    unsigned long x;
+    asm volatile("mv %0, sp" : "=r"(x));
+    return x;
+}
+
 #endif

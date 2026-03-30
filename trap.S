@@ -1,5 +1,4 @@
 .extern kernel_stack
-.extern kernel_stack_top
 
 .section .text
 .globl kernel_entry
