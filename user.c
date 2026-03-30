@@ -1,18 +1,8 @@
 #include "syscall.h"
 
-long test_func() {
-    long a = 123;
-    long b = 456;
-    long c = 789;
-
-    sys_add(1,2);
-
-    return a + b + c;
-}
-
 void user_main(void) {
-    long x = test_func();
-    sys_putchar('0' + (x / 100));  // 应该输出 3
+    sys_printstr("before ecall\n");
+    sys_putchar('z');
     sys_exit(0);
 }
 

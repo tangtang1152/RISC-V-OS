@@ -1,13 +1,23 @@
+.extern kernel_stack
+.extern kernel_stack_top
+
 .section .text
 .globl kernel_entry
 .globl user_entry
 
 .balign 4
 kernel_entry:
+    csrw sscratch, sp
+    la sp, kernel_stack
+    li t0, 4096
+    add sp, sp, t0
+
     addi sp, sp, -176
 
     sd ra, 0(sp)
-    sd sp, 8(sp)
+
+    csrr t0, sscratch
+    sd t0, 8(sp)
 
     sd s0, 16(sp)
     sd s1, 24(sp)
@@ -35,7 +45,6 @@ kernel_entry:
     call trap_handler
 
     ld ra, 0(sp)
-    ld sp, 8(sp)
 
     ld s0, 16(sp)
     ld s1, 24(sp)
@@ -59,7 +68,11 @@ kernel_entry:
     ld a6, 160(sp)
     ld a7, 168(sp)
 
+    # 最后再恢复 user sp
+    ld t0, 8(sp)
     addi sp, sp, 176
+    mv sp, t0
+
     sret
 
 .balign 4
