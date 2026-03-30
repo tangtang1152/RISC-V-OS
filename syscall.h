@@ -6,6 +6,7 @@
 #define SYS_GET_MAGIC 3
 #define SYS_ADD       4
 #define SYS_EXIT      5
+#define SYS_PRINTHEX  6
 
 long sys_putchar(char ch);
 long sys_printstr(const char *s);

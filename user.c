@@ -79,15 +79,6 @@ long sys_exit(long code) {
     return do_syscall1(SYS_EXIT, code);
 }
 
-long sys_printhex(unsigned long x){
-    char hex[] = "0123456789abcdef";
-    char buf[19];
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; i++) {
-        int shift = (15 - i) * 4;
-        buf[2 + i] = hex[(x >> shift) & 0xf];
-    }
-    buf[18] = '\0';
-    return do_syscall1(SYS_PRINTSTR, (long)buf);
+long sys_printhex(unsigned long x) {
+    return do_syscall1(SYS_PRINTHEX, x);
 }

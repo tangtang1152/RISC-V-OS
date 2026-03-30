@@ -22,10 +22,6 @@ _start:
 
 .section .bss.stack
 .align 12
-
-.globl stack
-.globl stack_top
-
 stack:
     .space 4096
 stack_top:

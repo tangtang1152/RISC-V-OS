@@ -4,25 +4,23 @@
 #include "trap.h"
 
 void trap_handler(struct trap_frame *tf) {
-    unsigned long scause;
-    asm volatile("csrr %0, scause" : "=r"(scause));
+    unsigned long scause = r_scause();
 
-    // 这样的sp是kernel stack上开了trap_handler函数栈帧之后的sp
-    // unsigned long sp;
-    // asm volatile("mv %0, sp" : "=r"(sp));
-
-    // print_str("[TRAP]:");
-    // print_hex((unsigned long) tf);
-    // print_str("\n");
-
-    if (scause == 8) {
+    if (scause == 8) {   // Environment call from U-mode
         switch (tf->a7) {
             case SYS_PUTCHAR:
                 putchar((char)tf->a0);
+                tf->a0 = 0;
                 break;
 
             case SYS_PRINTSTR:
                 print_str((const char *)tf->a0);
+                tf->a0 = 0;
+                break;
+
+            case SYS_PRINTHEX:
+                print_hex(tf->a0);
+                tf->a0 = 0;
                 break;
 
             case SYS_ADD:
@@ -37,8 +35,24 @@ void trap_handler(struct trap_frame *tf) {
                 print_str("exit\n");
                 while (1) {}
                 break;
+
+            default:
+                print_str("[KERNEL] unknown syscall, a7=");
+                print_hex(tf->a7);
+                print_str("\n");
+                tf->a0 = -1;
+                break;
         }
 
         w_sepc(r_sepc() + 4);
+        return;
     }
+
+    print_str("[KERNEL] unhandled trap, scause=");
+    print_hex(scause);
+    print_str(", sepc=");
+    print_hex(r_sepc());
+    print_str("\n");
+
+    while (1) {}
 }
