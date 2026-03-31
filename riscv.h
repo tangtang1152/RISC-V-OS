@@ -53,4 +53,19 @@ static inline unsigned long r_sscratch(void) {
     return x;
 }
 
+static inline void w_sie(unsigned long x) {
+    asm volatile("csrw sie, %0" : : "r"(x));
+}
+static inline unsigned long r_sie(void) {
+    unsigned long x;
+    asm volatile("csrr %0, sie" : "=r"(x));
+    return x;
+}
+
+static inline unsigned long r_time(void) {
+    unsigned long x;
+    asm volatile("csrr %0, time" : "=r"(x));
+    return x;
+}
+
 #endif

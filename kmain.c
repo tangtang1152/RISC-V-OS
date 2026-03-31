@@ -13,6 +13,9 @@ void kmain(void) {
 
     w_stvec(kernel_entry);
     print_str("stvec set\n");
+    
+    timer_init();
+    print_str("timer init done\n");
 
     w_sepc(current->tf.sepc); 
 
@@ -24,8 +27,6 @@ void kmain(void) {
 
     asm volatile("mv sp, %0" :: "r"(current->tf.sp));
     asm volatile("sret");
-
-    print_str("back in kmain?\n");
 
     while (1) { }
 }

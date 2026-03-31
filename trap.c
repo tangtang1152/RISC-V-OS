@@ -3,9 +3,40 @@
 #include "syscall.h"
 #include "trap.h"
 #include "proc.h"
+#include "timer.h"
+
+#define SCAUSE_INTERRUPT (1UL << 63)
+#define SCAUSE_CODE(x)   ((x) & 0xfff)
 
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
+
+    if (scause & SCAUSE_INTERRUPT) {
+        unsigned long code = SCAUSE_CODE(scause);
+
+        if (code == 5) {   // supervisor timer interrupt
+            timer_tick();
+
+            //和yield一样先存pc 但这次不需要加4 ecall+4是因为要跳过ecall
+            tf->sepc = r_sepc(); 
+            
+            if (current->state == PROC_RUNNING) {
+                current->state = PROC_RUNNABLE;
+            }
+
+            if (proc_switch() < 0) {
+                current->state = PROC_RUNNING;
+            }
+
+            return;
+        }
+
+        print_str("[KERNEL] unhandled interrupt, scause=");
+        print_hex(scause);
+        print_str("\n");
+        proc_dump();
+        while (1) {}
+    }
 
     if (scause == 8) {   // Environment call from U-mode
         switch (tf->a7) {
@@ -98,7 +129,17 @@ void trap_handler(struct trap_frame *tf) {
     print_hex(scause);
     print_str(", sepc=");
     print_hex(r_sepc());
+    print_str(", stval=");
+    print_hex(r_stval());
+    print_str(", current pid=");
+    if (current) {
+        print_hex((unsigned long)current->pid);
+    } else {
+        print_str("none");
+    }
     print_str("\n");
+
+    proc_dump();
 
     while (1) {}
 }

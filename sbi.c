@@ -20,14 +20,11 @@ long sbi_call(long ext, long fid, long arg0, long arg1, long arg2) {
 void putchar(char c) {
     sbi_call(0x1, 0, c, 0, 0);
 }
-
 void print_str(const char *s) {
     while (*s) {
         putchar(*s++);
     }
 }
-
-
 void print_hex(unsigned long x) {
     char hex[] = "0123456789abcdef";
     char buf[19];
@@ -39,4 +36,11 @@ void print_hex(unsigned long x) {
     }
     buf[18] = '\0';
     print_str(buf);
+}
+
+
+// 0x54 -> T 0x49 -> I 0x4D -> M 0x45 -> E
+// TIME
+void sbi_set_timer(unsigned long stime_value) {
+    sbi_call(0x54494D45, 0, stime_value, 0, 0);
 }

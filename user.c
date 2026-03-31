@@ -1,31 +1,19 @@
 #include "syscall.h"
 
-static inline unsigned long r_sp()
-{
-    unsigned long x;
-    asm volatile("mv %0, sp" : "=r"(x));
-    return x;
-}
-
 void user_main(void)
 {
     while (1) {
         sys_printstr("[USER1] hello\n");
-        sys_yield();
+        for (volatile int i = 0; i < 100000; i++) { }
     }
 }
 
 void user_main2(void)
 {
-    for (int i = 0; i < 3; i++) {
+    while (1) {
         sys_printstr("[USER2] hello\n");
-        sys_yield();
+        for (volatile int i = 0; i < 100000; i++) { }
     }
-
-    sys_printstr("[USER2] exit\n");
-    sys_exit(0);
-
-    while (1) { }
 }
 
 static inline long do_syscall0(long n) {
