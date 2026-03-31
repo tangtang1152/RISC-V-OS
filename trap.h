@@ -1,13 +1,16 @@
 #ifndef TRAP_H
 #define TRAP_H
 
-//暂不保证t0 t1 t2
 struct trap_frame {
     unsigned long ra;
     unsigned long sp;
     unsigned long gp;
     unsigned long tp;
 
+    unsigned long t0;
+    unsigned long t1;
+    unsigned long t2;
+    
     unsigned long s0;
     unsigned long s1;
     unsigned long s2;
