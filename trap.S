@@ -6,71 +6,100 @@
 
 .balign 4
 kernel_entry:
+    # save user sp first
     csrw sscratch, sp
 
-    la t0, current        # la rd, label ; t0 = &current
-    ld t0, 0(t0)          # t0 = *(&current) = current = struct proc *
-    
-    mv t2, t0             # t2 = &current->tf
+    # t0 = current
+    la t0, current
+    ld t0, 0(t0)
 
-    li t1, 4272        # 4272 = 4096 + 176
-    add sp, t0, t1     # sp = &current->kstack[KSTACK_SIZE]
+    # t2 = &current->tf
+    mv t2, t0
 
+    # sp = &current->kstack[KSTACK_SIZE]
+    # 4320 = sizeof(trap_frame)(224) + KSTACK_SIZE(4096)
+    li t1, 4320
+    add sp, t0, t1
+
+    # save user context into current->tf
     sd ra, 0(t2)
 
     csrr t1, sscratch
-    sd t1, 8(t2)
+    sd t1, 8(t2)      # tf->sp = user sp
 
-    sd s0, 16(t2)
-    sd s1, 24(t2)
-    sd s2, 32(t2)
-    sd s3, 40(t2)
-    sd s4, 48(t2)
-    sd s5, 56(t2)
-    sd s6, 64(t2)
-    sd s7, 72(t2)
-    sd s8, 80(t2)
-    sd s9, 88(t2)
-    sd s10, 96(t2)
-    sd s11, 104(t2)
+    sd gp, 16(t2)
+    sd tp, 24(t2)
 
-    sd a0, 112(t2)
-    sd a1, 120(t2)
-    sd a2, 128(t2)
-    sd a3, 136(t2)
-    sd a4, 144(t2)
-    sd a5, 152(t2)
-    sd a6, 160(t2)
-    sd a7, 168(t2)
+    sd s0, 32(t2)
+    sd s1, 40(t2)
+    sd s2, 48(t2)
+    sd s3, 56(t2)
+    sd s4, 64(t2)
+    sd s5, 72(t2)
+    sd s6, 80(t2)
+    sd s7, 88(t2)
+    sd s8, 96(t2)
+    sd s9, 104(t2)
+    sd s10, 112(t2)
+    sd s11, 120(t2)
 
-    mv a0, t2          # a0 = trap_frame*
+    sd a0, 128(t2)
+    sd a1, 136(t2)
+    sd a2, 144(t2)
+    sd a3, 152(t2)
+    sd a4, 160(t2)
+    sd a5, 168(t2)
+    sd a6, 176(t2)
+    sd a7, 184(t2)
+
+    sd t3, 192(t2)
+    sd t4, 200(t2)
+    sd t5, 208(t2)
+    sd t6, 216(t2)
+
+    # a0 = trap_frame *
+    mv a0, t2
     call trap_handler
 
+    # t registers are caller-saved, so recompute current->tf after call
+    la t0, current
+    ld t0, 0(t0)
+    mv t2, t0
+
+    # restore user context from current->tf
     ld ra, 0(t2)
 
-    ld s0, 16(t2)
-    ld s1, 24(t2)
-    ld s2, 32(t2)
-    ld s3, 40(t2)
-    ld s4, 48(t2)
-    ld s5, 56(t2)
-    ld s6, 64(t2)
-    ld s7, 72(t2)
-    ld s8, 80(t2)
-    ld s9, 88(t2)
-    ld s10, 96(t2)
-    ld s11, 104(t2)
+    ld gp, 16(t2)
+    ld tp, 24(t2)
 
-    ld a0, 112(t2)
-    ld a1, 120(t2)
-    ld a2, 128(t2)
-    ld a3, 136(t2)
-    ld a4, 144(t2)
-    ld a5, 152(t2)
-    ld a6, 160(t2)
-    ld a7, 168(t2)
+    ld s0, 32(t2)
+    ld s1, 40(t2)
+    ld s2, 48(t2)
+    ld s3, 56(t2)
+    ld s4, 64(t2)
+    ld s5, 72(t2)
+    ld s6, 80(t2)
+    ld s7, 88(t2)
+    ld s8, 96(t2)
+    ld s9, 104(t2)
+    ld s10, 112(t2)
+    ld s11, 120(t2)
 
-    # 最后再恢复 user sp
+    ld a0, 128(t2)
+    ld a1, 136(t2)
+    ld a2, 144(t2)
+    ld a3, 152(t2)
+    ld a4, 160(t2)
+    ld a5, 168(t2)
+    ld a6, 176(t2)
+    ld a7, 184(t2)
+
+    ld t3, 192(t2)
+    ld t4, 200(t2)
+    ld t5, 208(t2)
+    ld t6, 216(t2)
+
+    # restore user sp last
     ld t1, 8(t2)
     mv sp, t1
 
@@ -81,8 +110,3 @@ user_entry:
     call user_main
 1:
     j 1b
-
-.section .rodata
-.balign 4
-msg:
-    .asciz "hello from user mode syscall\n"

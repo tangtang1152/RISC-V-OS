@@ -1,9 +1,12 @@
 #ifndef TRAP_H
 #define TRAP_H
 
+//暂不保证t0 t1 t2
 struct trap_frame {
     unsigned long ra;
     unsigned long sp;
+    unsigned long gp;
+    unsigned long tp;
 
     unsigned long s0;
     unsigned long s1;
@@ -26,6 +29,11 @@ struct trap_frame {
     unsigned long a5;
     unsigned long a6;
     unsigned long a7;
+
+    unsigned long t3;
+    unsigned long t4;
+    unsigned long t5;
+    unsigned long t6;
 };
 
 #endif
