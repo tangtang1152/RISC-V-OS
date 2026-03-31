@@ -48,4 +48,32 @@ int proc_switch(void) {
     }
 
     return -1;
-}                                
+}
+
+const char *proc_state_name(int state) {
+    switch (state) {
+        case PROC_UNUSED:   return "UNUSED";
+        case PROC_RUNNABLE: return "RUNNABLE";
+        case PROC_RUNNING:  return "RUNNING";
+        case PROC_ZOMBIE:   return "ZOMBIE";
+        default:            return "UNKNOWN";
+    }
+}
+
+void proc_dump(void) {
+    print_str("[KERNEL] proc dump begin\n");
+
+    for (int i = 0; i < PROC_NUM; i++) {
+        print_str("  pid=");
+        print_hex((unsigned long)procs[i].pid);
+        print_str(" state=");
+        print_str(proc_state_name(procs[i].state));
+        print_str(" sepc=");
+        print_hex(procs[i].tf.sepc);
+        print_str(" sp=");
+        print_hex(procs[i].tf.sp);
+        print_str("\n");
+    }
+
+    print_str("[KERNEL] proc dump end\n");
+}

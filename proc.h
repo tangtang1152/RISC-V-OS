@@ -27,5 +27,7 @@ extern struct proc procs[PROC_NUM];
 
 void proc_init(void);
 int proc_switch(void);
+void proc_dump(void);
+const char *proc_state_name(int state);
 
 #endif

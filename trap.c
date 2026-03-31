@@ -32,33 +32,55 @@ void trap_handler(struct trap_frame *tf) {
                 tf->a0 = 'Z';
                 break;
 
-            case SYS_YIELD:
+            case SYS_YIELD: {
+                int old_pid = current->pid;
+
                 tf->sepc = r_sepc() + 4;
                 tf->a0 = 0;
 
                 if (current->state == PROC_RUNNING) {
                     current->state = PROC_RUNNABLE;
                 }
-                
-                //没有可切换的进程，就再把state改回来接着跑
+
                 if (proc_switch() < 0) {
                     current->state = PROC_RUNNING;
+                    print_str("[KERNEL] yield: no runnable proc, keep pid=");
+                    print_hex((unsigned long)old_pid);
+                    print_str("\n");
+                } else {
+                    print_str("[KERNEL] yield: pid=");
+                    print_hex((unsigned long)old_pid);
+                    print_str(" -> pid=");
+                    print_hex((unsigned long)current->pid);
+                    print_str("\n");
                 }
-                return;
 
-            case SYS_EXIT:
-                print_str("[KERNEL] proc exit pid=");
-                print_hex((unsigned long)current->pid);
+                return;
+            }
+
+            case SYS_EXIT: {
+                int old_pid = current->pid;
+
+                print_str("[KERNEL] exit: pid=");
+                print_hex((unsigned long)old_pid);
                 print_str("\n");
 
                 current->state = PROC_ZOMBIE;
-                
-                //没可切换的就进死循环等着了
+
                 if (proc_switch() < 0) {
                     print_str("[KERNEL] no runnable proc\n");
+                    proc_dump();
                     while (1) {}
                 }
+
+                print_str("[KERNEL] exit switch: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" -> pid=");
+                print_hex((unsigned long)current->pid);
+                print_str("\n");
+
                 return;
+            }
 
             default:
                 print_str("[KERNEL] unknown syscall, a7=");
