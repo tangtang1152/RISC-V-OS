@@ -1,4 +1,4 @@
-.extern kernel_stack
+.extern current
 
 .section .text
 .globl kernel_entry
@@ -7,9 +7,12 @@
 .balign 4
 kernel_entry:
     csrw sscratch, sp
-    la sp, kernel_stack
-    li t0, 4096
-    add sp, sp, t0
+
+    la t0, current        # la rd, label ; t0 = &current
+    ld t0, 0(t0)          # t0 = *(&current)
+
+    li t1, 4272        # 4272 = 4096 + 176
+    add sp, t0, t1     # sp = &current->kstack[KSTACK_SIZE]
 
     addi sp, sp, -176
 

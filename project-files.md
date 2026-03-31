@@ -1,11 +1,73 @@
-==== ./kernel.c ====
+# Project Files Export
+
+Export time: 3/31/2026, 6:02:45 AM
+
+Source directory: `riscv`
+
+Output file: `project-files.md`
+
+## Directory Structure
+
+```
+riscv
+├── .vscode
+├── .gitignore
+├── kernel.c
+├── kmain.c
+├── linker.ld
+├── Makefile
+├── riscv.h
+├── sbi.c
+├── sbi.h
+├── start.S
+├── syscall.h
+├── trap.c
+├── trap.h
+├── trap.S
+└── user.c
+```
+
+## File Statistics
+
+- Total files: 14
+- Total size: 10.3 KB
+
+### File Type Distribution
+
+| Extension | Files | Total Size |
+| --- | --- | --- |
+| .c | 5 | 4.6 KB |
+| .h | 4 | 2.4 KB |
+| (no extension) | 2 | 709 bytes |
+| .s | 2 | 1.9 KB |
+| .ld | 1 | 657 bytes |
+
+## File Contents
+
+### .gitignore
+
+```plaintext
+// .gitignore
+kernel.elf
+kernel.bin
+kernel.dump
+```
+
+### kernel.c
+
+```c
+// kernel.c
 #define KSTACK_SIZE 4096
 
 __attribute__((aligned(16)))
 char kernel_stack[KSTACK_SIZE];
 //char *kernel_stack_top = kernel_stack + KSTACK_SIZE;
+```
 
-==== ./kmain.c ====
+### kmain.c
+
+```c
+// kmain.c
 #include "sbi.h"
 #include "riscv.h"
 
@@ -39,8 +101,12 @@ void kmain(void) {
 
     while (1) { }
 }
+```
 
-==== ./linker.ld ====
+### linker.ld
+
+```plaintext
+// linker.ld
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
@@ -74,8 +140,43 @@ SECTIONS
         *(COMMON)
     }
 }
+```
 
-==== ./riscv.h ====
+### Makefile
+
+```plaintext
+// Makefile
+CROSS = riscv64-unknown-elf-
+CC = $(CROSS)gcc
+OBJCOPY = $(CROSS)objcopy
+
+CFLAGS = -Wall -Wextra -O0 -g -ffreestanding -nostdlib -nostartfiles
+CFLAGS += -march=rv64gc -mabi=lp64 -mcmodel=medany
+LDFLAGS = -T linker.ld -nostdlib
+
+all: kernel.bin
+
+kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c kernel.c
+	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c kernel.c $(LDFLAGS) -o kernel.elf
+
+kernel.bin: kernel.elf
+	$(OBJCOPY) -O binary kernel.elf kernel.bin
+
+run: kernel.elf
+	qemu-system-riscv64 \
+		-machine virt \
+		-nographic \
+		-bios default \
+		-kernel kernel.elf
+
+clean:
+	rm -f kernel.elf kernel.bin
+```
+
+### riscv.h
+
+```plaintext
+// riscv.h
 #ifndef RISCV_H
 #define RISCV_H
 
@@ -86,36 +187,58 @@ static inline void w_stvec(void *x) {
 static inline void w_sepc(unsigned long x) {
     asm volatile("csrw sepc, %0" : : "r"(x));
 }
-
 static inline unsigned long r_sepc(void) {
     unsigned long x;
     asm volatile("csrr %0, sepc" : "=r"(x));
     return x;
 }
 
+static inline void w_sstatus(unsigned long x) {
+    asm volatile("csrw sstatus, %0" : : "r"(x));
+}
 static inline unsigned long r_sstatus(void) {
     unsigned long x;
     asm volatile("csrr %0, sstatus" : "=r"(x));
     return x;
 }
 
-static inline void w_sstatus(unsigned long x) {
-    asm volatile("csrw sstatus, %0" : : "r"(x));
-}
-
 static inline void w_sp(unsigned long x){
     asm volatile("mv sp, %0" :: "r"(x));
 }
-
 static inline unsigned long r_sp(void){
     unsigned long x;
     asm volatile("mv %0, sp" : "=r"(x));
     return x;
 }
 
-#endif
+static inline unsigned long r_scause(void) {
+    unsigned long x;
+    asm volatile("csrr %0, scause" : "=r"(x));
+    return x;
+}
 
-==== ./sbi.c ====
+static inline unsigned long r_stval(void) {
+    unsigned long x;
+    asm volatile("csrr %0, stval" : "=r"(x));
+    return x;
+}
+
+static inline void w_sscratch(unsigned long x) {
+    asm volatile("csrw sscratch, %0" : : "r"(x));
+}
+static inline unsigned long r_sscratch(void) {
+    unsigned long x;
+    asm volatile("csrr %0, sscratch" : "=r"(x));
+    return x;
+}
+
+#endif
+```
+
+### sbi.c
+
+```c
+// sbi.c
 #include "sbi.h"
 
 long sbi_call(long ext, long fid, long arg0, long arg1, long arg2) {
@@ -158,8 +281,12 @@ void print_hex(unsigned long x) {
     buf[18] = '\0';
     print_str(buf);
 }
+```
 
-==== ./sbi.h ====
+### sbi.h
+
+```plaintext
+// sbi.h
 #ifndef SBI_H
 #define SBI_H
 
@@ -170,8 +297,12 @@ void print_hex(unsigned long x);
 
 #endif
 
+```
 
-==== ./start.S ====
+### start.S
+
+```plaintext
+// start.S
 .section .text.init
 .global _start
 
@@ -199,8 +330,12 @@ _start:
 stack:
     .space 4096
 stack_top:
+```
 
-==== ./syscall.h ====
+### syscall.h
+
+```plaintext
+// syscall.h
 #ifndef SYSCALL_H
 #define SYSCALL_H
 
@@ -219,18 +354,16 @@ long sys_exit(long code);
 long sys_printhex(unsigned long x);
 
 #endif
+```
 
-==== ./trap.c ====
+### trap.c
+
+```c
+// trap.c
 #include "sbi.h"
 #include "riscv.h"
 #include "syscall.h"
 #include "trap.h"
-
-static inline unsigned long r_scause(void) {
-    unsigned long x;
-    asm volatile("csrr %0, scause" : "=r"(x));
-    return x;
-}
 
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
@@ -285,8 +418,12 @@ void trap_handler(struct trap_frame *tf) {
 
     while (1) {}
 }
+```
 
-==== ./trap.h ====
+### trap.h
+
+```plaintext
+// trap.h
 #ifndef TRAP_H
 #define TRAP_H
 
@@ -318,8 +455,12 @@ struct trap_frame {
 };
 
 #endif
+```
 
-==== ./trap.S ====
+### trap.S
+
+```plaintext
+// trap.S
 .extern kernel_stack
 
 .section .text
@@ -406,8 +547,12 @@ user_entry:
 .balign 4
 msg:
     .asciz "hello from user mode syscall\n"
+```
 
-==== ./user.c ====
+### user.c
+
+```c
+// user.c
 #include "syscall.h"
 
 static inline unsigned long r_sp()
@@ -492,4 +637,5 @@ long sys_exit(long code) {
 long sys_printhex(unsigned long x) {
     return do_syscall1(SYS_PRINTHEX, x);
 }
+```
 

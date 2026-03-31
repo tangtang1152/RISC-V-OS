@@ -2,6 +2,7 @@
 #include "riscv.h"
 #include "syscall.h"
 #include "trap.h"
+#include "proc.h"
 
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
@@ -33,6 +34,7 @@ void trap_handler(struct trap_frame *tf) {
 
             case SYS_EXIT:
                 print_str("exit\n");
+                current->state = PROC_ZOMBIE;
                 while (1) {}
                 break;
 
