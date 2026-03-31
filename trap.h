@@ -34,6 +34,8 @@ struct trap_frame {
     unsigned long t4;
     unsigned long t5;
     unsigned long t6;
+
+    unsigned long sepc;
 };
 
 #endif

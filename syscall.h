@@ -7,6 +7,7 @@
 #define SYS_ADD       4
 #define SYS_EXIT      5
 #define SYS_PRINTHEX  6
+#define SYS_YIELD 7
 
 long sys_putchar(char ch);
 long sys_printstr(const char *s);
@@ -14,5 +15,6 @@ long sys_get_magic(void);
 long sys_add(long x, long y);
 long sys_exit(long code);
 long sys_printhex(unsigned long x);
+long sys_yield(void);
 
 #endif

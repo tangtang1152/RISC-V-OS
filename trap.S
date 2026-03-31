@@ -3,6 +3,7 @@
 .section .text
 .globl kernel_entry
 .globl user_entry
+.globl user_entry2
 
 .balign 4
 kernel_entry:
@@ -17,8 +18,8 @@ kernel_entry:
     mv t2, t0
 
     # sp = &current->kstack[KSTACK_SIZE]
-    # 4320 = sizeof(trap_frame)(224) + KSTACK_SIZE(4096)
-    li t1, 4320
+    # 4328 = sizeof(trap_frame)(232) + KSTACK_SIZE(4096)
+    li t1, 4328
     add sp, t0, t1
 
     # save user context into current->tf
@@ -56,6 +57,9 @@ kernel_entry:
     sd t4, 200(t2)
     sd t5, 208(t2)
     sd t6, 216(t2)
+
+    csrr t1, sepc
+    sd t1, 224(t2) 
 
     # a0 = trap_frame *
     mv a0, t2
@@ -103,6 +107,9 @@ kernel_entry:
     ld t1, 8(t2)
     mv sp, t1
 
+    ld t1, 224(t2)
+    csrw sepc, t1
+
     sret
 
 .balign 4
@@ -110,3 +117,9 @@ user_entry:
     call user_main
 1:
     j 1b
+
+.balign 4
+user_entry2:
+    call user_main2
+2:
+    j 2b

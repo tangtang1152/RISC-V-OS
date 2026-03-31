@@ -3,6 +3,7 @@
 
 #include "trap.h"
 
+#define PROC_NUM 2
 #define KSTACK_SIZE 4096
 #define USTACK_SIZE 4096
 
@@ -18,10 +19,13 @@ struct proc {
     char kstack[KSTACK_SIZE] __attribute__((aligned(16)));
     char ustack[USTACK_SIZE] __attribute__((aligned(16)));
     int state;
+    int pid;
 };
 
 extern struct proc *current;
+extern struct proc procs[PROC_NUM];
 
 void proc_init(void);
+void proc_switch(void);
 
 #endif

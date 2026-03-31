@@ -1,6 +1,6 @@
 # Project Files Export
 
-Export time: 3/31/2026, 6:02:45 AM
+Export time: 3/31/2026, 9:09:34 PM
 
 Source directory: `riscv`
 
@@ -16,6 +16,8 @@ riscv
 ├── kmain.c
 ├── linker.ld
 ├── Makefile
+├── proc.c
+├── proc.h
 ├── riscv.h
 ├── sbi.c
 ├── sbi.h
@@ -29,17 +31,17 @@ riscv
 
 ## File Statistics
 
-- Total files: 14
-- Total size: 10.3 KB
+- Total files: 16
+- Total size: 13.0 KB
 
 ### File Type Distribution
 
 | Extension | Files | Total Size |
 | --- | --- | --- |
-| .c | 5 | 4.6 KB |
-| .h | 4 | 2.4 KB |
-| (no extension) | 2 | 709 bytes |
-| .s | 2 | 1.9 KB |
+| .c | 6 | 5.8 KB |
+| .h | 5 | 3.2 KB |
+| (no extension) | 2 | 747 bytes |
+| .s | 2 | 2.6 KB |
 | .ld | 1 | 657 bytes |
 
 ## File Contents
@@ -51,17 +53,14 @@ riscv
 kernel.elf
 kernel.bin
 kernel.dump
+project-files.md
 ```
 
 ### kernel.c
 
 ```c
 // kernel.c
-#define KSTACK_SIZE 4096
 
-__attribute__((aligned(16)))
-char kernel_stack[KSTACK_SIZE];
-//char *kernel_stack_top = kernel_stack + KSTACK_SIZE;
 ```
 
 ### kmain.c
@@ -70,31 +69,29 @@ char kernel_stack[KSTACK_SIZE];
 // kmain.c
 #include "sbi.h"
 #include "riscv.h"
-
-#define USTACK_SIZE 4096
-__attribute__((aligned(16)))
-char user_stack[USTACK_SIZE];
+#include "proc.h"
 
 extern void kernel_entry(void);
-extern void user_entry(void);
 
 void kmain(void) {
     unsigned long sstatus;
 
     print_str("kmain enter\n");
 
+    proc_init();
+
     w_stvec(kernel_entry);
     print_str("stvec set\n");
 
-    w_sepc((unsigned long)user_entry); 
+    w_sepc(current->tf.sepc); 
 
     sstatus = r_sstatus();
     sstatus &= ~(1UL << 8);   // clear SPP -> sret returns to U-mode
-    w_sstatus(sstatus);
+    w_sstatus(sstatus); 
 
     print_str("about to enter user mode\n");
 
-    asm volatile("mv sp, %0" :: "r"(user_stack + USTACK_SIZE));
+    asm volatile("mv sp, %0" :: "r"(current->tf.sp));
     asm volatile("sret");
 
     print_str("back in kmain?\n");
@@ -156,8 +153,8 @@ LDFLAGS = -T linker.ld -nostdlib
 
 all: kernel.bin
 
-kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c kernel.c
-	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c kernel.c $(LDFLAGS) -o kernel.elf
+kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c kernel.c proc.c proc.h
+	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c kernel.c proc.c $(LDFLAGS) -o kernel.elf
 
 kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary kernel.elf kernel.bin
@@ -171,6 +168,98 @@ run: kernel.elf
 
 clean:
 	rm -f kernel.elf kernel.bin
+```
+
+### proc.c
+
+```c
+// proc.c
+#include "proc.h"
+#include "riscv.h"
+#include "sbi.h"
+
+extern void user_entry(void);
+extern void user_entry2(void);
+
+struct proc procs[PROC_NUM];
+struct proc *current = 0;
+
+static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
+    p->pid = pid;
+    p->state = PROC_RUNNABLE;
+
+    p->tf.ra = 0;
+    p->tf.sp = (unsigned long)(p->ustack + USTACK_SIZE);
+
+    p->tf.a0 = 0;
+    p->tf.a1 = 0;
+    p->tf.a2 = 0;
+    p->tf.a3 = 0;
+    p->tf.a4 = 0;
+    p->tf.a5 = 0;
+    p->tf.a6 = 0;
+    p->tf.a7 = 0;
+
+    p->tf.sepc = entry;
+}
+
+void proc_init(void) {
+    init_proc_context(&procs[0], 0, (unsigned long)user_entry);
+    init_proc_context(&procs[1], 1, (unsigned long)user_entry2);
+
+    current = &procs[0];
+    current->state = PROC_RUNNING;
+}
+void proc_switch(void) {
+    if (current->state == PROC_RUNNING) {
+        current->state = PROC_RUNNABLE;
+    }
+
+    if (current == &procs[0]) {
+        current = &procs[1];
+    } else {
+        current = &procs[0];
+    }
+
+    current->state = PROC_RUNNING;
+}
+```
+
+### proc.h
+
+```plaintext
+// proc.h
+#ifndef PROC_H
+#define PROC_H
+
+#include "trap.h"
+
+#define PROC_NUM 2
+#define KSTACK_SIZE 4096
+#define USTACK_SIZE 4096
+
+enum proc_state {
+    PROC_UNUSED = 0,
+    PROC_RUNNABLE,
+    PROC_RUNNING,
+    PROC_ZOMBIE,
+};
+
+struct proc {
+    struct trap_frame tf;
+    char kstack[KSTACK_SIZE] __attribute__((aligned(16)));
+    char ustack[USTACK_SIZE] __attribute__((aligned(16)));
+    int state;
+    int pid;
+};
+
+extern struct proc *current;
+extern struct proc procs[PROC_NUM];
+
+void proc_init(void);
+void proc_switch(void);
+
+#endif
 ```
 
 ### riscv.h
@@ -345,6 +434,7 @@ stack_top:
 #define SYS_ADD       4
 #define SYS_EXIT      5
 #define SYS_PRINTHEX  6
+#define SYS_YIELD 7
 
 long sys_putchar(char ch);
 long sys_printstr(const char *s);
@@ -352,6 +442,7 @@ long sys_get_magic(void);
 long sys_add(long x, long y);
 long sys_exit(long code);
 long sys_printhex(unsigned long x);
+long sys_yield(void);
 
 #endif
 ```
@@ -364,6 +455,7 @@ long sys_printhex(unsigned long x);
 #include "riscv.h"
 #include "syscall.h"
 #include "trap.h"
+#include "proc.h"
 
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
@@ -395,8 +487,15 @@ void trap_handler(struct trap_frame *tf) {
 
             case SYS_EXIT:
                 print_str("exit\n");
+                current->state = PROC_ZOMBIE;
                 while (1) {}
                 break;
+
+            case SYS_YIELD:
+                tf->sepc = r_sepc() + 4;   // old proc's next pc
+                tf->a0 = 0;                // old proc's return value
+                proc_switch();
+                return;
 
             default:
                 print_str("[KERNEL] unknown syscall, a7=");
@@ -406,7 +505,7 @@ void trap_handler(struct trap_frame *tf) {
                 break;
         }
 
-        w_sepc(r_sepc() + 4);
+        tf->sepc = r_sepc() + 4;
         return;
     }
 
@@ -427,9 +526,12 @@ void trap_handler(struct trap_frame *tf) {
 #ifndef TRAP_H
 #define TRAP_H
 
+//暂不保证t0 t1 t2
 struct trap_frame {
     unsigned long ra;
     unsigned long sp;
+    unsigned long gp;
+    unsigned long tp;
 
     unsigned long s0;
     unsigned long s1;
@@ -452,6 +554,13 @@ struct trap_frame {
     unsigned long a5;
     unsigned long a6;
     unsigned long a7;
+
+    unsigned long t3;
+    unsigned long t4;
+    unsigned long t5;
+    unsigned long t6;
+
+    unsigned long sepc;
 };
 
 #endif
@@ -461,79 +570,117 @@ struct trap_frame {
 
 ```plaintext
 // trap.S
-.extern kernel_stack
+.extern current
 
 .section .text
 .globl kernel_entry
 .globl user_entry
+.globl user_entry2
 
 .balign 4
 kernel_entry:
+    # save user sp first
     csrw sscratch, sp
-    la sp, kernel_stack
-    li t0, 4096
-    add sp, sp, t0
 
-    addi sp, sp, -176
+    # t0 = current
+    la t0, current
+    ld t0, 0(t0)
 
-    sd ra, 0(sp)
+    # t2 = &current->tf
+    mv t2, t0
 
-    csrr t0, sscratch
-    sd t0, 8(sp)
+    # sp = &current->kstack[KSTACK_SIZE]
+    # 4328 = sizeof(trap_frame)(232) + KSTACK_SIZE(4096)
+    li t1, 4328
+    add sp, t0, t1
 
-    sd s0, 16(sp)
-    sd s1, 24(sp)
-    sd s2, 32(sp)
-    sd s3, 40(sp)
-    sd s4, 48(sp)
-    sd s5, 56(sp)
-    sd s6, 64(sp)
-    sd s7, 72(sp)
-    sd s8, 80(sp)
-    sd s9, 88(sp)
-    sd s10, 96(sp)
-    sd s11, 104(sp)
+    # save user context into current->tf
+    sd ra, 0(t2)
 
-    sd a0, 112(sp)
-    sd a1, 120(sp)
-    sd a2, 128(sp)
-    sd a3, 136(sp)
-    sd a4, 144(sp)
-    sd a5, 152(sp)
-    sd a6, 160(sp)
-    sd a7, 168(sp)
+    csrr t1, sscratch
+    sd t1, 8(t2)      # tf->sp = user sp
 
-    mv a0, sp          # a0 = trap_frame*
+    sd gp, 16(t2)
+    sd tp, 24(t2)
+
+    sd s0, 32(t2)
+    sd s1, 40(t2)
+    sd s2, 48(t2)
+    sd s3, 56(t2)
+    sd s4, 64(t2)
+    sd s5, 72(t2)
+    sd s6, 80(t2)
+    sd s7, 88(t2)
+    sd s8, 96(t2)
+    sd s9, 104(t2)
+    sd s10, 112(t2)
+    sd s11, 120(t2)
+
+    sd a0, 128(t2)
+    sd a1, 136(t2)
+    sd a2, 144(t2)
+    sd a3, 152(t2)
+    sd a4, 160(t2)
+    sd a5, 168(t2)
+    sd a6, 176(t2)
+    sd a7, 184(t2)
+
+    sd t3, 192(t2)
+    sd t4, 200(t2)
+    sd t5, 208(t2)
+    sd t6, 216(t2)
+
+    csrr t1, sepc
+    sd t1, 224(t2) 
+
+    # a0 = trap_frame *
+    mv a0, t2
     call trap_handler
 
-    ld ra, 0(sp)
+    # t registers are caller-saved, so recompute current->tf after call
+    la t0, current
+    ld t0, 0(t0)
+    mv t2, t0
 
-    ld s0, 16(sp)
-    ld s1, 24(sp)
-    ld s2, 32(sp)
-    ld s3, 40(sp)
-    ld s4, 48(sp)
-    ld s5, 56(sp)
-    ld s6, 64(sp)
-    ld s7, 72(sp)
-    ld s8, 80(sp)
-    ld s9, 88(sp)
-    ld s10, 96(sp)
-    ld s11, 104(sp)
+    # restore user context from current->tf
+    ld ra, 0(t2)
 
-    ld a0, 112(sp)
-    ld a1, 120(sp)
-    ld a2, 128(sp)
-    ld a3, 136(sp)
-    ld a4, 144(sp)
-    ld a5, 152(sp)
-    ld a6, 160(sp)
-    ld a7, 168(sp)
+    ld gp, 16(t2)
+    ld tp, 24(t2)
 
-    # 最后再恢复 user sp
-    ld t0, 8(sp)
-    addi sp, sp, 176
-    mv sp, t0
+    ld s0, 32(t2)
+    ld s1, 40(t2)
+    ld s2, 48(t2)
+    ld s3, 56(t2)
+    ld s4, 64(t2)
+    ld s5, 72(t2)
+    ld s6, 80(t2)
+    ld s7, 88(t2)
+    ld s8, 96(t2)
+    ld s9, 104(t2)
+    ld s10, 112(t2)
+    ld s11, 120(t2)
+
+    ld a0, 128(t2)
+    ld a1, 136(t2)
+    ld a2, 144(t2)
+    ld a3, 152(t2)
+    ld a4, 160(t2)
+    ld a5, 168(t2)
+    ld a6, 176(t2)
+    ld a7, 184(t2)
+
+    ld t3, 192(t2)
+    ld t4, 200(t2)
+    ld t5, 208(t2)
+    ld t6, 216(t2)
+
+    # restore user sp last
+    ld t1, 8(t2)
+    mv sp, t1
+
+    ld t1, 224(t2)
+    csrw sepc, t1
 
     sret
 
@@ -543,10 +690,11 @@ user_entry:
 1:
     j 1b
 
-.section .rodata
 .balign 4
-msg:
-    .asciz "hello from user mode syscall\n"
+user_entry2:
+    call user_main2
+2:
+    j 2b
 ```
 
 ### user.c
@@ -562,15 +710,20 @@ static inline unsigned long r_sp()
     return x;
 }
 
-void user_main()
+void user_main(void)
 {
-    unsigned long sp = r_sp();
+    while (1) {
+        sys_printstr("[USER1] hello\n");
+        sys_yield();
+    }
+}
 
-    sys_printstr("[USER] sp=");
-    sys_printhex(sp);
-    sys_printstr("\n");
-
-    sys_printstr("hello\n");
+void user_main2(void)
+{
+    while (1) {
+        sys_printstr("[USER2] hello\n");
+        sys_yield();
+    }
 }
 
 static inline long do_syscall0(long n) {
@@ -617,25 +770,23 @@ static inline long do_syscall2(long n, long x, long y) {
 long sys_putchar(char ch) {
     return do_syscall1(SYS_PUTCHAR, ch);
 }
-
 long sys_printstr(const char *s) {
     return do_syscall1(SYS_PRINTSTR, (long)s);
 }
-
 long sys_get_magic(void) {
     return do_syscall0(SYS_GET_MAGIC);
 }
-
 long sys_add(long x, long y) {
     return do_syscall2(SYS_ADD, x, y);
-}
-                        
+}                   
 long sys_exit(long code) {
     return do_syscall1(SYS_EXIT, code);
 }
-
 long sys_printhex(unsigned long x) {
     return do_syscall1(SYS_PRINTHEX, x);
+}
+long sys_yield(void) {
+    return do_syscall0(SYS_YIELD);
 }
 ```
 

@@ -38,6 +38,12 @@ void trap_handler(struct trap_frame *tf) {
                 while (1) {}
                 break;
 
+            case SYS_YIELD:
+                tf->sepc = r_sepc() + 4;   // old proc's next pc
+                tf->a0 = 0;                // old proc's return value
+                proc_switch();
+                return;
+
             default:
                 print_str("[KERNEL] unknown syscall, a7=");
                 print_hex(tf->a7);
@@ -46,7 +52,7 @@ void trap_handler(struct trap_frame *tf) {
                 break;
         }
 
-        w_sepc(r_sepc() + 4);
+        tf->sepc = r_sepc() + 4;
         return;
     }
 
