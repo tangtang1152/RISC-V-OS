@@ -17,10 +17,15 @@ void user_main(void)
 
 void user_main2(void)
 {
-    while (1) {
+    for (int i = 0; i < 3; i++) {
         sys_printstr("[USER2] hello\n");
         sys_yield();
     }
+
+    sys_printstr("[USER2] exit\n");
+    sys_exit(0);
+
+    while (1) { }
 }
 
 static inline long do_syscall0(long n) {

@@ -32,16 +32,32 @@ void trap_handler(struct trap_frame *tf) {
                 tf->a0 = 'Z';
                 break;
 
-            case SYS_EXIT:
-                print_str("exit\n");
-                current->state = PROC_ZOMBIE;
-                while (1) {}
-                break;
-
             case SYS_YIELD:
-                tf->sepc = r_sepc() + 4;   // old proc's next pc
-                tf->a0 = 0;                // old proc's return value
-                proc_switch();
+                tf->sepc = r_sepc() + 4;
+                tf->a0 = 0;
+
+                if (current->state == PROC_RUNNING) {
+                    current->state = PROC_RUNNABLE;
+                }
+                
+                //没有可切换的进程，就再把state改回来接着跑
+                if (proc_switch() < 0) {
+                    current->state = PROC_RUNNING;
+                }
+                return;
+
+            case SYS_EXIT:
+                print_str("[KERNEL] proc exit pid=");
+                print_hex((unsigned long)current->pid);
+                print_str("\n");
+
+                current->state = PROC_ZOMBIE;
+                
+                //没可切换的就进死循环等着了
+                if (proc_switch() < 0) {
+                    print_str("[KERNEL] no runnable proc\n");
+                    while (1) {}
+                }
                 return;
 
             default:

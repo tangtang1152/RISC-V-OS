@@ -26,6 +26,6 @@ extern struct proc *current;
 extern struct proc procs[PROC_NUM];
 
 void proc_init(void);
-void proc_switch(void);
+int proc_switch(void);
 
 #endif

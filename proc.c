@@ -34,16 +34,18 @@ void proc_init(void) {
     current = &procs[0];
     current->state = PROC_RUNNING;
 }
-void proc_switch(void) {
-    if (current->state == PROC_RUNNING) {
-        current->state = PROC_RUNNABLE;
+int proc_switch(void) {
+    int start = current ? current->pid : 0;
+
+    for (int i = 1; i <= PROC_NUM; i++) {
+        int next = (start + i) % PROC_NUM;
+
+        if (procs[next].state == PROC_RUNNABLE) {
+            current = &procs[next];
+            current->state = PROC_RUNNING;
+            return 0;
+        }
     }
 
-    if (current == &procs[0]) {
-        current = &procs[1];
-    } else {
-        current = &procs[0];
-    }
-
-    current->state = PROC_RUNNING;
-}
+    return -1;
+}                                
