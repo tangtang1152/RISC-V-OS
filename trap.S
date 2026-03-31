@@ -9,71 +9,70 @@ kernel_entry:
     csrw sscratch, sp
 
     la t0, current        # la rd, label ; t0 = &current
-    ld t0, 0(t0)          # t0 = *(&current)
+    ld t0, 0(t0)          # t0 = *(&current) = current = struct proc *
+    
+    mv t2, t0             # t2 = &current->tf
 
     li t1, 4272        # 4272 = 4096 + 176
     add sp, t0, t1     # sp = &current->kstack[KSTACK_SIZE]
 
-    addi sp, sp, -176
+    sd ra, 0(t2)
 
-    sd ra, 0(sp)
+    csrr t1, sscratch
+    sd t1, 8(t2)
 
-    csrr t0, sscratch
-    sd t0, 8(sp)
+    sd s0, 16(t2)
+    sd s1, 24(t2)
+    sd s2, 32(t2)
+    sd s3, 40(t2)
+    sd s4, 48(t2)
+    sd s5, 56(t2)
+    sd s6, 64(t2)
+    sd s7, 72(t2)
+    sd s8, 80(t2)
+    sd s9, 88(t2)
+    sd s10, 96(t2)
+    sd s11, 104(t2)
 
-    sd s0, 16(sp)
-    sd s1, 24(sp)
-    sd s2, 32(sp)
-    sd s3, 40(sp)
-    sd s4, 48(sp)
-    sd s5, 56(sp)
-    sd s6, 64(sp)
-    sd s7, 72(sp)
-    sd s8, 80(sp)
-    sd s9, 88(sp)
-    sd s10, 96(sp)
-    sd s11, 104(sp)
+    sd a0, 112(t2)
+    sd a1, 120(t2)
+    sd a2, 128(t2)
+    sd a3, 136(t2)
+    sd a4, 144(t2)
+    sd a5, 152(t2)
+    sd a6, 160(t2)
+    sd a7, 168(t2)
 
-    sd a0, 112(sp)
-    sd a1, 120(sp)
-    sd a2, 128(sp)
-    sd a3, 136(sp)
-    sd a4, 144(sp)
-    sd a5, 152(sp)
-    sd a6, 160(sp)
-    sd a7, 168(sp)
-
-    mv a0, sp          # a0 = trap_frame*
+    mv a0, t2          # a0 = trap_frame*
     call trap_handler
 
-    ld ra, 0(sp)
+    ld ra, 0(t2)
 
-    ld s0, 16(sp)
-    ld s1, 24(sp)
-    ld s2, 32(sp)
-    ld s3, 40(sp)
-    ld s4, 48(sp)
-    ld s5, 56(sp)
-    ld s6, 64(sp)
-    ld s7, 72(sp)
-    ld s8, 80(sp)
-    ld s9, 88(sp)
-    ld s10, 96(sp)
-    ld s11, 104(sp)
+    ld s0, 16(t2)
+    ld s1, 24(t2)
+    ld s2, 32(t2)
+    ld s3, 40(t2)
+    ld s4, 48(t2)
+    ld s5, 56(t2)
+    ld s6, 64(t2)
+    ld s7, 72(t2)
+    ld s8, 80(t2)
+    ld s9, 88(t2)
+    ld s10, 96(t2)
+    ld s11, 104(t2)
 
-    ld a0, 112(sp)
-    ld a1, 120(sp)
-    ld a2, 128(sp)
-    ld a3, 136(sp)
-    ld a4, 144(sp)
-    ld a5, 152(sp)
-    ld a6, 160(sp)
-    ld a7, 168(sp)
+    ld a0, 112(t2)
+    ld a1, 120(t2)
+    ld a2, 128(t2)
+    ld a3, 136(t2)
+    ld a4, 144(t2)
+    ld a5, 152(t2)
+    ld a6, 160(t2)
+    ld a7, 168(t2)
 
     # 最后再恢复 user sp
-    ld t0, 8(sp)
-    addi sp, sp, 176
-    mv sp, t0
+    ld t1, 8(t2)
+    mv sp, t1
 
     sret
 
