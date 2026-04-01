@@ -82,6 +82,19 @@ int proc_switch(void) {
     return -1;
 }
 
+// 如果一直没有 runnable，只在第一次进入 idle 时打印一次。
+void schedule(void) {
+    int idle_printed = 0;
+
+    while (proc_switch() < 0) {
+        if (!idle_printed) {
+            print_str("[KERNEL] schedule: no runnable process, wait for interrupt\n");
+            idle_printed = 1;
+        }
+        asm volatile("wfi");
+    }
+}
+
 void proc_wakeup_sleepers(unsigned long now) {
     for (int i = 0; i < PROC_NUM; i++) {
         if (procs[i].state == PROC_BLOCKED &&

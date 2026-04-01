@@ -8,12 +8,6 @@
 #define SCAUSE_INTERRUPT (1UL << 63)
 #define SCAUSE_CODE(x)   ((x) & 0xfff)
 
-static void wait_for_runnable(void) {
-    while (proc_switch() < 0) {
-        asm volatile("wfi");
-    }
-}
-
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
 
@@ -81,18 +75,13 @@ void trap_handler(struct trap_frame *tf) {
                     current->state = PROC_RUNNABLE;
                 }
 
-                if (proc_switch() < 0) {
-                    current->state = PROC_RUNNING;
-                    print_str("[KERNEL] yield: no runnable proc, keep pid=");
-                    print_hex((unsigned long)old_pid);
-                    print_str("\n");
-                } else {
-                    print_str("[KERNEL] yield: pid=");
-                    print_hex((unsigned long)old_pid);
-                    print_str(" -> pid=");
-                    print_hex((unsigned long)current->pid);
-                    print_str("\n");
-                }
+                schedule();
+
+                print_str("[KERNEL] yield: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" -> pid=");
+                print_hex((unsigned long)current->pid);
+                print_str("\n");
 
                 return;
             }
@@ -113,7 +102,7 @@ void trap_handler(struct trap_frame *tf) {
                 print_hex(current->wakeup_tick);
                 print_str("\n");
 
-                wait_for_runnable();
+                schedule();
                 return;
             }
 
@@ -127,11 +116,7 @@ void trap_handler(struct trap_frame *tf) {
 
                 current->state = PROC_ZOMBIE;
 
-                if (proc_switch() < 0) {
-                    print_str("[KERNEL] no runnable proc\n");
-                    proc_dump();
-                    while (1) {}
-                }
+                schedule();
 
                 print_str("[KERNEL] exit switch: pid=");
                 print_hex((unsigned long)old_pid);
