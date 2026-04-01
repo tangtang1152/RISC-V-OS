@@ -12,8 +12,34 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
 
+    p->scratch.user_t0 = 0;
+    p->scratch.user_t1 = 0;
+    p->scratch.user_t2 = 0;
+    p->scratch.user_sp = 0;
+    p->scratch.tf_ptr = (unsigned long)&(p->tf);
+    p->scratch.kstack_top = (unsigned long)(p->kstack + KSTACK_SIZE);
+
     p->tf.ra = 0;
     p->tf.sp = (unsigned long)(p->ustack + USTACK_SIZE);
+    p->tf.gp = 0;
+    p->tf.tp = 0;
+
+    p->tf.t0 = 0;
+    p->tf.t1 = 0;
+    p->tf.t2 = 0;
+
+    p->tf.s0 = 0;
+    p->tf.s1 = 0;
+    p->tf.s2 = 0;
+    p->tf.s3 = 0;
+    p->tf.s4 = 0;
+    p->tf.s5 = 0;
+    p->tf.s6 = 0;
+    p->tf.s7 = 0;
+    p->tf.s8 = 0;
+    p->tf.s9 = 0;
+    p->tf.s10 = 0;
+    p->tf.s11 = 0;
 
     p->tf.a0 = 0;
     p->tf.a1 = 0;
@@ -23,6 +49,11 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->tf.a5 = 0;
     p->tf.a6 = 0;
     p->tf.a7 = 0;
+
+    p->tf.t3 = 0;
+    p->tf.t4 = 0;
+    p->tf.t5 = 0;
+    p->tf.t6 = 0;
 
     p->tf.sepc = entry;
 }

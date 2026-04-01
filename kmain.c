@@ -1,6 +1,7 @@
 #include "sbi.h"
 #include "riscv.h"
 #include "proc.h"
+#include "timer.h"
 
 extern void kernel_entry(void);
 
@@ -18,6 +19,7 @@ void kmain(void) {
     print_str("timer init done\n");
 
     w_sepc(current->tf.sepc); 
+    w_sscratch((unsigned long)&current->scratch);
 
     sstatus = r_sstatus();
     sstatus &= ~(1UL << 8);   // clear SPP -> sret returns to U-mode

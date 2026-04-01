@@ -14,7 +14,17 @@ enum proc_state {
     PROC_ZOMBIE,
 };
 
+struct trap_scratch {
+    unsigned long user_t1;
+    unsigned long user_t2;
+    unsigned long user_t0;
+    unsigned long user_sp;
+    unsigned long tf_ptr;
+    unsigned long kstack_top;
+};
+
 struct proc {
+    struct trap_scratch scratch; // 故意放第一个 sscratch 里直接放它的地址
     struct trap_frame tf;
     char kstack[KSTACK_SIZE] __attribute__((aligned(16)));
     char ustack[USTACK_SIZE] __attribute__((aligned(16)));
