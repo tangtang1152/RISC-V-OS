@@ -3,7 +3,9 @@
 void user_main(void)
 {
     while (1) {
-        sys_printstr("[USER1] hello\n");
+        sys_printstr("[USER1] before sleep\n");
+        sys_sleep(5);
+        sys_printstr("[USER1] after sleep\n");
         for (volatile int i = 0; i < 100000; i++) { }
     }
 }
@@ -11,7 +13,7 @@ void user_main(void)
 void user_main2(void)
 {
     while (1) {
-        sys_printstr("[USER2] hello\n");
+        sys_printstr("[USER2] running\n");
         for (volatile int i = 0; i < 100000; i++) { }
     }
 }
@@ -77,4 +79,7 @@ long sys_printhex(unsigned long x) {
 }
 long sys_yield(void) {
     return do_syscall0(SYS_YIELD);
+}
+long sys_sleep(long tick_count) {
+    return do_syscall1(SYS_SLEEP, tick_count);
 }

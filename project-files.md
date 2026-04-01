@@ -1,6 +1,6 @@
 # Project Files Export
 
-Export time: 3/31/2026, 9:09:34 PM
+Export time: 4/2/2026, 12:46:10 AM
 
 Source directory: `riscv`
 
@@ -23,6 +23,8 @@ riscv
 ├── sbi.h
 ├── start.S
 ├── syscall.h
+├── timer.c
+├── timer.h
 ├── trap.c
 ├── trap.h
 ├── trap.S
@@ -31,17 +33,17 @@ riscv
 
 ## File Statistics
 
-- Total files: 16
-- Total size: 13.0 KB
+- Total files: 18
+- Total size: 19.2 KB
 
 ### File Type Distribution
 
 | Extension | Files | Total Size |
 | --- | --- | --- |
-| .c | 6 | 5.8 KB |
-| .h | 5 | 3.2 KB |
-| (no extension) | 2 | 747 bytes |
-| .s | 2 | 2.6 KB |
+| .c | 7 | 10.4 KB |
+| .h | 6 | 4.1 KB |
+| (no extension) | 2 | 771 bytes |
+| .s | 2 | 3.3 KB |
 | .ld | 1 | 657 bytes |
 
 ## File Contents
@@ -70,6 +72,7 @@ project-files.md
 #include "sbi.h"
 #include "riscv.h"
 #include "proc.h"
+#include "timer.h"
 
 extern void kernel_entry(void);
 
@@ -82,8 +85,12 @@ void kmain(void) {
 
     w_stvec(kernel_entry);
     print_str("stvec set\n");
+    
+    timer_init();
+    print_str("timer init done\n");
 
     w_sepc(current->tf.sepc); 
+    w_sscratch((unsigned long)&current->scratch);
 
     sstatus = r_sstatus();
     sstatus &= ~(1UL << 8);   // clear SPP -> sret returns to U-mode
@@ -93,8 +100,6 @@ void kmain(void) {
 
     asm volatile("mv sp, %0" :: "r"(current->tf.sp));
     asm volatile("sret");
-
-    print_str("back in kmain?\n");
 
     while (1) { }
 }
@@ -153,8 +158,8 @@ LDFLAGS = -T linker.ld -nostdlib
 
 all: kernel.bin
 
-kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c kernel.c proc.c proc.h
-	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c kernel.c proc.c $(LDFLAGS) -o kernel.elf
+kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c kernel.c proc.c proc.h timer.h timer.c
+	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c kernel.c proc.c timer.c $(LDFLAGS) -o kernel.elf
 
 kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary kernel.elf kernel.bin
@@ -188,8 +193,34 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
 
+    p->scratch.user_t0 = 0;
+    p->scratch.user_t1 = 0;
+    p->scratch.user_t2 = 0;
+    p->scratch.user_sp = 0;
+    p->scratch.tf_ptr = (unsigned long)&(p->tf);
+    p->scratch.kstack_top = (unsigned long)(p->kstack + KSTACK_SIZE);
+
     p->tf.ra = 0;
     p->tf.sp = (unsigned long)(p->ustack + USTACK_SIZE);
+    p->tf.gp = 0;
+    p->tf.tp = 0;
+
+    p->tf.t0 = 0;
+    p->tf.t1 = 0;
+    p->tf.t2 = 0;
+
+    p->tf.s0 = 0;
+    p->tf.s1 = 0;
+    p->tf.s2 = 0;
+    p->tf.s3 = 0;
+    p->tf.s4 = 0;
+    p->tf.s5 = 0;
+    p->tf.s6 = 0;
+    p->tf.s7 = 0;
+    p->tf.s8 = 0;
+    p->tf.s9 = 0;
+    p->tf.s10 = 0;
+    p->tf.s11 = 0;
 
     p->tf.a0 = 0;
     p->tf.a1 = 0;
@@ -199,6 +230,11 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->tf.a5 = 0;
     p->tf.a6 = 0;
     p->tf.a7 = 0;
+
+    p->tf.t3 = 0;
+    p->tf.t4 = 0;
+    p->tf.t5 = 0;
+    p->tf.t6 = 0;
 
     p->tf.sepc = entry;
 }
@@ -210,19 +246,50 @@ void proc_init(void) {
     current = &procs[0];
     current->state = PROC_RUNNING;
 }
-void proc_switch(void) {
-    if (current->state == PROC_RUNNING) {
-        current->state = PROC_RUNNABLE;
+int proc_switch(void) {
+    int start = current ? current->pid : 0;
+
+    for (int i = 1; i <= PROC_NUM; i++) {
+        int next = (start + i) % PROC_NUM;
+
+        if (procs[next].state == PROC_RUNNABLE) {
+            current = &procs[next];
+            current->state = PROC_RUNNING;
+            return 0;
+        }
     }
 
-    if (current == &procs[0]) {
-        current = &procs[1];
-    } else {
-        current = &procs[0];
-    }
-
-    current->state = PROC_RUNNING;
+    return -1;
 }
+
+const char *proc_state_name(int state) {
+    switch (state) {
+        case PROC_UNUSED:   return "UNUSED";
+        case PROC_RUNNABLE: return "RUNNABLE";
+        case PROC_RUNNING:  return "RUNNING";
+        case PROC_ZOMBIE:   return "ZOMBIE";
+        default:            return "UNKNOWN";
+    }
+}
+
+void proc_dump(void) {
+    print_str("[KERNEL] proc dump begin\n");
+
+    for (int i = 0; i < PROC_NUM; i++) {
+        print_str("  pid=");
+        print_hex((unsigned long)procs[i].pid);
+        print_str(" state=");
+        print_str(proc_state_name(procs[i].state));
+        print_str(" sepc=");
+        print_hex(procs[i].tf.sepc);
+        print_str(" sp=");
+        print_hex(procs[i].tf.sp);
+        print_str("\n");
+    }
+
+    print_str("[KERNEL] proc dump end\n");
+}
+
 ```
 
 ### proc.h
@@ -245,7 +312,17 @@ enum proc_state {
     PROC_ZOMBIE,
 };
 
+struct trap_scratch {
+    unsigned long user_t1;
+    unsigned long user_t2;
+    unsigned long user_t0;
+    unsigned long user_sp;
+    unsigned long tf_ptr;
+    unsigned long kstack_top;
+};
+
 struct proc {
+    struct trap_scratch scratch; // 故意放第一个 sscratch 里直接放它的地址
     struct trap_frame tf;
     char kstack[KSTACK_SIZE] __attribute__((aligned(16)));
     char ustack[USTACK_SIZE] __attribute__((aligned(16)));
@@ -257,7 +334,9 @@ extern struct proc *current;
 extern struct proc procs[PROC_NUM];
 
 void proc_init(void);
-void proc_switch(void);
+int proc_switch(void);
+void proc_dump(void);
+const char *proc_state_name(int state);
 
 #endif
 ```
@@ -321,6 +400,21 @@ static inline unsigned long r_sscratch(void) {
     return x;
 }
 
+static inline void w_sie(unsigned long x) {
+    asm volatile("csrw sie, %0" : : "r"(x));
+}
+static inline unsigned long r_sie(void) {
+    unsigned long x;
+    asm volatile("csrr %0, sie" : "=r"(x));
+    return x;
+}
+
+static inline unsigned long r_time(void) {
+    unsigned long x;
+    asm volatile("csrr %0, time" : "=r"(x));
+    return x;
+}
+
 #endif
 ```
 
@@ -350,14 +444,11 @@ long sbi_call(long ext, long fid, long arg0, long arg1, long arg2) {
 void putchar(char c) {
     sbi_call(0x1, 0, c, 0, 0);
 }
-
 void print_str(const char *s) {
     while (*s) {
         putchar(*s++);
     }
 }
-
-
 void print_hex(unsigned long x) {
     char hex[] = "0123456789abcdef";
     char buf[19];
@@ -369,6 +460,13 @@ void print_hex(unsigned long x) {
     }
     buf[18] = '\0';
     print_str(buf);
+}
+
+
+// 0x54 -> T 0x49 -> I 0x4D -> M 0x45 -> E
+// TIME
+void sbi_set_timer(unsigned long stime_value) {
+    sbi_call(0x54494D45, 0, stime_value, 0, 0);
 }
 ```
 
@@ -383,6 +481,8 @@ long sbi_call(long ext, long fid, long arg0, long arg1, long arg2);
 void putchar(char c);
 void print_str(const char *s);
 void print_hex(unsigned long x);
+
+void sbi_set_timer(unsigned long stime_value);
 
 #endif
 
@@ -447,6 +547,54 @@ long sys_yield(void);
 #endif
 ```
 
+### timer.c
+
+```c
+// timer.c
+#include "timer.h"
+#include "riscv.h"
+#include "sbi.h"
+
+#define TIMER_INTERVAL 1000000UL
+
+static void timer_next(void) {
+    unsigned long now = r_time();
+    sbi_set_timer(now + TIMER_INTERVAL);
+}
+
+void timer_init(void) {
+    unsigned long sie;
+    unsigned long sstatus;
+
+    timer_next();
+
+    sie = r_sie();
+    sie |= (1UL << 5);          // STIE Supervisor Timer Interrupt Enable
+    w_sie(sie);
+
+    sstatus = r_sstatus();
+    sstatus |= (1UL << 1);      // SIE Supervisor Interrupt Enable
+    w_sstatus(sstatus);
+}
+
+void timer_tick(void) {
+    timer_next();
+}
+```
+
+### timer.h
+
+```plaintext
+// timer.h
+#ifndef TIMER_H
+#define TIMER_H
+
+void timer_init(void);
+void timer_tick(void);
+
+#endif
+```
+
 ### trap.c
 
 ```c
@@ -456,9 +604,40 @@ long sys_yield(void);
 #include "syscall.h"
 #include "trap.h"
 #include "proc.h"
+#include "timer.h"
+
+#define SCAUSE_INTERRUPT (1UL << 63)
+#define SCAUSE_CODE(x)   ((x) & 0xfff)
 
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
+
+    if (scause & SCAUSE_INTERRUPT) {
+        unsigned long code = SCAUSE_CODE(scause);
+
+        if (code == 5) {   // supervisor timer interrupt
+            timer_tick();
+
+            //和yield一样先存pc 但这次不需要加4 ecall+4是因为要跳过ecall
+            tf->sepc = r_sepc(); 
+            
+            if (current->state == PROC_RUNNING) {
+                current->state = PROC_RUNNABLE;
+            }
+
+            if (proc_switch() < 0) {
+                current->state = PROC_RUNNING;
+            }
+
+            return;
+        }
+
+        print_str("[KERNEL] unhandled interrupt, scause=");
+        print_hex(scause);
+        print_str("\n");
+        proc_dump();
+        while (1) {}
+    }
 
     if (scause == 8) {   // Environment call from U-mode
         switch (tf->a7) {
@@ -485,17 +664,55 @@ void trap_handler(struct trap_frame *tf) {
                 tf->a0 = 'Z';
                 break;
 
-            case SYS_EXIT:
-                print_str("exit\n");
-                current->state = PROC_ZOMBIE;
-                while (1) {}
-                break;
+            case SYS_YIELD: {
+                int old_pid = current->pid;
 
-            case SYS_YIELD:
-                tf->sepc = r_sepc() + 4;   // old proc's next pc
-                tf->a0 = 0;                // old proc's return value
-                proc_switch();
+                tf->sepc = r_sepc() + 4;
+                tf->a0 = 0;
+
+                if (current->state == PROC_RUNNING) {
+                    current->state = PROC_RUNNABLE;
+                }
+
+                if (proc_switch() < 0) {
+                    current->state = PROC_RUNNING;
+                    print_str("[KERNEL] yield: no runnable proc, keep pid=");
+                    print_hex((unsigned long)old_pid);
+                    print_str("\n");
+                } else {
+                    print_str("[KERNEL] yield: pid=");
+                    print_hex((unsigned long)old_pid);
+                    print_str(" -> pid=");
+                    print_hex((unsigned long)current->pid);
+                    print_str("\n");
+                }
+
                 return;
+            }
+
+            case SYS_EXIT: {
+                int old_pid = current->pid;
+
+                print_str("[KERNEL] exit: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str("\n");
+
+                current->state = PROC_ZOMBIE;
+
+                if (proc_switch() < 0) {
+                    print_str("[KERNEL] no runnable proc\n");
+                    proc_dump();
+                    while (1) {}
+                }
+
+                print_str("[KERNEL] exit switch: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" -> pid=");
+                print_hex((unsigned long)current->pid);
+                print_str("\n");
+
+                return;
+            }
 
             default:
                 print_str("[KERNEL] unknown syscall, a7=");
@@ -513,7 +730,17 @@ void trap_handler(struct trap_frame *tf) {
     print_hex(scause);
     print_str(", sepc=");
     print_hex(r_sepc());
+    print_str(", stval=");
+    print_hex(r_stval());
+    print_str(", current pid=");
+    if (current) {
+        print_hex((unsigned long)current->pid);
+    } else {
+        print_str("none");
+    }
     print_str("\n");
+
+    proc_dump();
 
     while (1) {}
 }
@@ -526,13 +753,16 @@ void trap_handler(struct trap_frame *tf) {
 #ifndef TRAP_H
 #define TRAP_H
 
-//暂不保证t0 t1 t2
 struct trap_frame {
     unsigned long ra;
     unsigned long sp;
     unsigned long gp;
     unsigned long tp;
 
+    unsigned long t0;
+    unsigned long t1;
+    unsigned long t2;
+    
     unsigned long s0;
     unsigned long s1;
     unsigned long s2;
@@ -579,108 +809,125 @@ struct trap_frame {
 
 .balign 4
 kernel_entry:
-    # save user sp first
-    csrw sscratch, sp
+    # swap: t0 <- sscratch(scratch_ptr), sscratch <- user_t0
+    csrrw t0, sscratch, t0
 
-    # t0 = current
-    la t0, current
-    ld t0, 0(t0)
+    # early scratch save of user t1/t2/t0/sp
+    sd t1, 0(t0)              # scratch.user_t1
+    sd t2, 8(t0)              # scratch.user_t2
 
-    # t2 = &current->tf
-    mv t2, t0
+    csrr t1, sscratch         # t1 = user_t0
+    sd t1, 16(t0)             # scratch.user_t0
 
-    # sp = &current->kstack[KSTACK_SIZE]
-    # 4328 = sizeof(trap_frame)(232) + KSTACK_SIZE(4096)
-    li t1, 4328
-    add sp, t0, t1
+    sd sp, 24(t0)             # scratch.user_sp
 
-    # save user context into current->tf
-    sd ra, 0(t2)
+    # load pointers prepared in proc_init()
+    ld t1, 32(t0)             # scratch.tf_ptr
+    ld sp, 40(t0)             # scratch.kstack_top
 
-    csrr t1, sscratch
-    sd t1, 8(t2)      # tf->sp = user sp
+    # t1 = trap_frame *
+    # t0 = scratch *
+    sd ra, 0(t1)
 
-    sd gp, 16(t2)
-    sd tp, 24(t2)
+    ld t2, 24(t0)
+    sd t2, 8(t1)              # tf->sp = user sp
 
-    sd s0, 32(t2)
-    sd s1, 40(t2)
-    sd s2, 48(t2)
-    sd s3, 56(t2)
-    sd s4, 64(t2)
-    sd s5, 72(t2)
-    sd s6, 80(t2)
-    sd s7, 88(t2)
-    sd s8, 96(t2)
-    sd s9, 104(t2)
-    sd s10, 112(t2)
-    sd s11, 120(t2)
+    sd gp, 16(t1)
+    sd tp, 24(t1)
 
-    sd a0, 128(t2)
-    sd a1, 136(t2)
-    sd a2, 144(t2)
-    sd a3, 152(t2)
-    sd a4, 160(t2)
-    sd a5, 168(t2)
-    sd a6, 176(t2)
-    sd a7, 184(t2)
+    ld t2, 16(t0)
+    sd t2, 32(t1)             # tf->t0 = saved user_t0
 
-    sd t3, 192(t2)
-    sd t4, 200(t2)
-    sd t5, 208(t2)
-    sd t6, 216(t2)
+    ld t2, 0(t0)
+    sd t2, 40(t1)             # tf->t1 = saved user_t1
 
-    csrr t1, sepc
-    sd t1, 224(t2) 
+    ld t2, 8(t0)
+    sd t2, 48(t1)             # tf->t2 = saved user_t2
 
-    # a0 = trap_frame *
-    mv a0, t2
+    sd s0, 56(t1)
+    sd s1, 64(t1)
+    sd s2, 72(t1)
+    sd s3, 80(t1)
+    sd s4, 88(t1)
+    sd s5, 96(t1)
+    sd s6, 104(t1)
+    sd s7, 112(t1)
+    sd s8, 120(t1)
+    sd s9, 128(t1)
+    sd s10, 136(t1)
+    sd s11, 144(t1)
+
+    sd a0, 152(t1)
+    sd a1, 160(t1)
+    sd a2, 168(t1)
+    sd a3, 176(t1)
+    sd a4, 184(t1)
+    sd a5, 192(t1)
+    sd a6, 200(t1)
+    sd a7, 208(t1)
+
+    sd t3, 216(t1)
+    sd t4, 224(t1)
+    sd t5, 232(t1)
+    sd t6, 240(t1)
+
+    csrr t2, sepc
+    sd t2, 248(t1)
+
+    mv a0, t1
     call trap_handler
 
-    # t registers are caller-saved, so recompute current->tf after call
+    # after handler, reload current scratch/tf because current may have changed
     la t0, current
-    ld t0, 0(t0)
-    mv t2, t0
+    ld t0, 0(t0)              # t0 = current
+    addi t0, t0, 0            # t0 = &current->scratch
+    addi t1, t0, 48           # t1 = &current->tf
 
-    # restore user context from current->tf
-    ld ra, 0(t2)
+    # while back in user mode, sscratch must point to current scratch
+    csrw sscratch, t0
 
-    ld gp, 16(t2)
-    ld tp, 24(t2)
+    ld ra, 0(t1)
 
-    ld s0, 32(t2)
-    ld s1, 40(t2)
-    ld s2, 48(t2)
-    ld s3, 56(t2)
-    ld s4, 64(t2)
-    ld s5, 72(t2)
-    ld s6, 80(t2)
-    ld s7, 88(t2)
-    ld s8, 96(t2)
-    ld s9, 104(t2)
-    ld s10, 112(t2)
-    ld s11, 120(t2)
+    ld gp, 16(t1)
+    ld tp, 24(t1)
 
-    ld a0, 128(t2)
-    ld a1, 136(t2)
-    ld a2, 144(t2)
-    ld a3, 152(t2)
-    ld a4, 160(t2)
-    ld a5, 168(t2)
-    ld a6, 176(t2)
-    ld a7, 184(t2)
+    ld s0, 56(t1)
+    ld s1, 64(t1)
+    ld s2, 72(t1)
+    ld s3, 80(t1)
+    ld s4, 88(t1)
+    ld s5, 96(t1)
+    ld s6, 104(t1)
+    ld s7, 112(t1)
+    ld s8, 120(t1)
+    ld s9, 128(t1)
+    ld s10, 136(t1)
+    ld s11, 144(t1)
 
-    ld t3, 192(t2)
-    ld t4, 200(t2)
-    ld t5, 208(t2)
-    ld t6, 216(t2)
+    ld a0, 152(t1)
+    ld a1, 160(t1)
+    ld a2, 168(t1)
+    ld a3, 176(t1)
+    ld a4, 184(t1)
+    ld a5, 192(t1)
+    ld a6, 200(t1)
+    ld a7, 208(t1)
 
-    # restore user sp last
-    ld t1, 8(t2)
-    mv sp, t1
+    ld t3, 216(t1)
+    ld t4, 224(t1)
+    ld t5, 232(t1)
+    ld t6, 240(t1)
 
-    ld t1, 224(t2)
-    csrw sepc, t1
+    ld t2, 248(t1)
+    csrw sepc, t2
+
+    ld t2, 8(t1)
+    mv sp, t2                 # restore user sp
+
+    # restore user t0/t1/t2 last
+    ld t0, 32(t1)
+    ld t2, 48(t1)
+    ld t1, 40(t1)
 
     sret
 
@@ -703,18 +950,11 @@ user_entry2:
 // user.c
 #include "syscall.h"
 
-static inline unsigned long r_sp()
-{
-    unsigned long x;
-    asm volatile("mv %0, sp" : "=r"(x));
-    return x;
-}
-
 void user_main(void)
 {
     while (1) {
         sys_printstr("[USER1] hello\n");
-        sys_yield();
+        for (volatile int i = 0; i < 100000; i++) { }
     }
 }
 
@@ -722,7 +962,7 @@ void user_main2(void)
 {
     while (1) {
         sys_printstr("[USER2] hello\n");
-        sys_yield();
+        for (volatile int i = 0; i < 100000; i++) { }
     }
 }
 

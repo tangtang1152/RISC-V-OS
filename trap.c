@@ -8,6 +8,12 @@
 #define SCAUSE_INTERRUPT (1UL << 63)
 #define SCAUSE_CODE(x)   ((x) & 0xfff)
 
+static void wait_for_runnable(void) {
+    while (proc_switch() < 0) {
+        asm volatile("wfi");
+    }
+}
+
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
 
@@ -16,6 +22,8 @@ void trap_handler(struct trap_frame *tf) {
 
         if (code == 5) {   // supervisor timer interrupt
             timer_tick();
+
+            proc_wakeup_sleepers(ticks);
 
             //和yield一样先存pc 但这次不需要加4 ecall+4是因为要跳过ecall
             tf->sepc = r_sepc(); 
@@ -88,6 +96,27 @@ void trap_handler(struct trap_frame *tf) {
 
                 return;
             }
+
+            case SYS_SLEEP: {
+                unsigned long n = tf->a0;
+                int old_pid = current->pid;
+
+                tf->sepc = r_sepc() + 4;
+                tf->a0 = 0;
+
+                current->wakeup_tick = ticks + n;
+                current->state = PROC_BLOCKED;
+
+                print_str("[KERNEL] sleep: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" until tick=");
+                print_hex(current->wakeup_tick);
+                print_str("\n");
+
+                wait_for_runnable();
+                return;
+            }
+
 
             case SYS_EXIT: {
                 int old_pid = current->pid;

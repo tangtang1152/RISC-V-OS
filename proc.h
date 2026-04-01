@@ -11,6 +11,7 @@ enum proc_state {
     PROC_UNUSED = 0,
     PROC_RUNNABLE,
     PROC_RUNNING,
+    PROC_BLOCKED,
     PROC_ZOMBIE,
 };
 
@@ -30,6 +31,7 @@ struct proc {
     char ustack[USTACK_SIZE] __attribute__((aligned(16)));
     int state;
     int pid;
+    unsigned long wakeup_tick;
 };
 
 extern struct proc *current;
@@ -38,6 +40,7 @@ extern struct proc procs[PROC_NUM];
 void proc_init(void);
 int proc_switch(void);
 void proc_dump(void);
+void proc_wakeup_sleepers(unsigned long now);
 const char *proc_state_name(int state);
 
 #endif

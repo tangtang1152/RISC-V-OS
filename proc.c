@@ -11,6 +11,7 @@ struct proc *current = 0;
 static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
+    p->wakeup_tick = 0;
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -81,11 +82,21 @@ int proc_switch(void) {
     return -1;
 }
 
+void proc_wakeup_sleepers(unsigned long now) {
+    for (int i = 0; i < PROC_NUM; i++) {
+        if (procs[i].state == PROC_BLOCKED &&
+            procs[i].wakeup_tick <= now) {
+            procs[i].state = PROC_RUNNABLE;
+        }
+    }
+}
+
 const char *proc_state_name(int state) {
     switch (state) {
         case PROC_UNUSED:   return "UNUSED";
         case PROC_RUNNABLE: return "RUNNABLE";
         case PROC_RUNNING:  return "RUNNING";
+        case PROC_BLOCKED:  return "BLOCKED";
         case PROC_ZOMBIE:   return "ZOMBIE";
         default:            return "UNKNOWN";
     }

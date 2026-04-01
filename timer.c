@@ -4,6 +4,8 @@
 
 #define TIMER_INTERVAL 1000000UL
 
+volatile unsigned long ticks = 0;
+
 static void timer_next(void) {
     unsigned long now = r_time();
     sbi_set_timer(now + TIMER_INTERVAL);
@@ -25,5 +27,6 @@ void timer_init(void) {
 }
 
 void timer_tick(void) {
+    ticks++;
     timer_next();
 }

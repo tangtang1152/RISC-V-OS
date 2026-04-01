@@ -8,6 +8,7 @@
 #define SYS_EXIT      5
 #define SYS_PRINTHEX  6
 #define SYS_YIELD 7
+#define SYS_SLEEP     8
 
 long sys_putchar(char ch);
 long sys_printstr(const char *s);
@@ -16,5 +17,6 @@ long sys_add(long x, long y);
 long sys_exit(long code);
 long sys_printhex(unsigned long x);
 long sys_yield(void);
+long sys_sleep(long tick_count);
 
 #endif
