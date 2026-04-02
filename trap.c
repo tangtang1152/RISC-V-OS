@@ -101,6 +101,7 @@ void trap_handler(struct trap_frame *tf) {
 
                 current->wakeup_tick = ticks + n;
                 current->state = PROC_BLOCKED;
+                current->block_reason = PROC_BLOCK_SLEEP;
 
                 print_str("[KERNEL] sleep: pid=");
                 print_hex((unsigned long)old_pid);
@@ -138,6 +139,7 @@ void trap_handler(struct trap_frame *tf) {
                 if (!proc_is_zombie(target_pid)) {
                     current->wait_pid = target_pid;
                     current->state = PROC_BLOCKED;
+                    current->block_reason = PROC_BLOCK_WAIT;
                     schedule();
                 }
 
@@ -156,6 +158,7 @@ void trap_handler(struct trap_frame *tf) {
                 current->state = PROC_ZOMBIE;
 
                 proc_wakeup_waiters(current->pid);
+                proc_dump();
 
                 schedule();
 

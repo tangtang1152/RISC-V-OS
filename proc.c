@@ -14,6 +14,7 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->wakeup_tick = 0;
     p->wait_pid = -1;
     p->waited_by = -1;
+    p->block_reason = PROC_BLOCK_NONE;
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -101,34 +102,60 @@ void proc_wakeup_sleepers(unsigned long now) {
     for (int i = 0; i < PROC_NUM; i++) {
         if (procs[i].state == PROC_BLOCKED &&
             procs[i].wakeup_tick <= now) {
+            procs[i].block_reason = PROC_BLOCK_NONE;
             procs[i].state = PROC_RUNNABLE;
         }
     }
 }
+
 void proc_wakeup_waiters(int exited_pid) {
     int waiter_pid;
 
+    print_str("[KERNEL] wake_waiters: exited_pid=");
+    print_hex((unsigned long)exited_pid);
+    print_str("\n");
+
     if (exited_pid < 0 || exited_pid >= PROC_NUM) {
+        print_str("[KERNEL] wake_waiters: invalid exited pid\n");
         return;
     }
 
     waiter_pid = procs[exited_pid].waited_by;
+
+    print_str("[KERNEL] wake_waiters: waited_by=");
+    print_hex((unsigned long)waiter_pid);
+    print_str("\n");
+
     if (waiter_pid < 0 || waiter_pid >= PROC_NUM) {
+        print_str("[KERNEL] wake_waiters: no valid waiter\n");
         return;
     }
+
+    print_str("[KERNEL] wake_waiters: waiter state=");
+    print_str(proc_state_name(procs[waiter_pid].state));
+    print_str(" reason=");
+    print_str(proc_block_reason_name(procs[waiter_pid].block_reason));
+    print_str(" wait_pid=");
+    print_hex((unsigned long)procs[waiter_pid].wait_pid);
+    print_str("\n");
 
     if (procs[waiter_pid].state == PROC_BLOCKED &&
         procs[waiter_pid].wait_pid == exited_pid) {
         procs[waiter_pid].wait_pid = -1;
+        procs[waiter_pid].block_reason = PROC_BLOCK_NONE;
         procs[waiter_pid].state = PROC_RUNNABLE;
+
+        print_str("[KERNEL] wake_waiters: waiter -> RUNNABLE\n");
     }
 }
+
 void proc_reap(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
         return;
     }
 
     procs[pid].state = PROC_UNUSED;
+    procs[pid].block_reason = PROC_BLOCK_NONE;
     procs[pid].waited_by = -1;
     procs[pid].wait_pid = -1;
     procs[pid].wakeup_tick = 0;
@@ -153,6 +180,8 @@ void proc_dump(void) {
         print_hex((unsigned long)procs[i].pid);
         print_str(" state=");
         print_str(proc_state_name(procs[i].state));
+        print_str(" reason=");
+        print_str(proc_block_reason_name(procs[i].block_reason));
         print_str(" sepc=");
         print_hex(procs[i].tf.sepc);
         print_str(" sp=");
@@ -161,4 +190,13 @@ void proc_dump(void) {
     }
 
     print_str("[KERNEL] proc dump end\n");
+}
+
+const char *proc_block_reason_name(int reason) {
+    switch (reason) {
+        case PROC_BLOCK_NONE:  return "NONE";
+        case PROC_BLOCK_SLEEP: return "SLEEP";
+        case PROC_BLOCK_WAIT:  return "WAIT";
+        default:               return "UNKNOWN";
+    }
 }

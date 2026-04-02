@@ -14,6 +14,11 @@ enum proc_state {
     PROC_BLOCKED,
     PROC_ZOMBIE,
 };
+enum proc_block_reason {
+    PROC_BLOCK_NONE = 0,
+    PROC_BLOCK_SLEEP,
+    PROC_BLOCK_WAIT,
+};
 
 struct trap_scratch {
     unsigned long user_t1;
@@ -34,6 +39,7 @@ struct proc {
     unsigned long wakeup_tick;
     int wait_pid;
     int waited_by;
+    int block_reason;
 };
 
 extern struct proc *current;
@@ -47,5 +53,6 @@ void proc_wakeup_waiters(int exited_pid);
 void proc_reap(int pid);
 const char *proc_state_name(int state);
 void schedule(void);
+const char *proc_block_reason_name(int reason);
 
 #endif
