@@ -8,6 +8,13 @@
 #define SCAUSE_INTERRUPT (1UL << 63)
 #define SCAUSE_CODE(x)   ((x) & 0xfff)
 
+static int proc_is_zombie(int pid) {
+    if (pid < 0 || pid >= PROC_NUM) {
+        return 0;
+    }
+    return procs[pid].state == PROC_ZOMBIE;
+}
+
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
 
@@ -105,6 +112,43 @@ void trap_handler(struct trap_frame *tf) {
                 return;
             }
 
+            case SYS_WAIT: {
+                int target_pid = (int)tf->a0;
+
+                tf->sepc = r_sepc() + 4;
+
+                if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                if (current->wait_pid != -1) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                if (procs[target_pid].waited_by != -1 &&
+                    procs[target_pid].waited_by != current->pid) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                if (proc_is_zombie(target_pid)) {
+                    if (procs[target_pid].waited_by == -1) {
+                        procs[target_pid].waited_by = current->pid;
+                    }
+                    tf->a0 = 0;
+                    break;
+                }
+
+                procs[target_pid].waited_by = current->pid;
+                current->wait_pid = target_pid;
+                current->state = PROC_BLOCKED;
+                tf->a0 = 0;
+
+                schedule();
+                return;
+            }
 
             case SYS_EXIT: {
                 int old_pid = current->pid;
@@ -114,6 +158,8 @@ void trap_handler(struct trap_frame *tf) {
                 print_str("\n");
 
                 current->state = PROC_ZOMBIE;
+
+                proc_wakeup_waiters(current->pid);
 
                 schedule();
 

@@ -32,6 +32,8 @@ struct proc {
     int state;
     int pid;
     unsigned long wakeup_tick;
+    int wait_pid;
+    int waited_by;
 };
 
 extern struct proc *current;
@@ -41,6 +43,7 @@ void proc_init(void);
 int proc_switch(void);
 void proc_dump(void);
 void proc_wakeup_sleepers(unsigned long now);
+void proc_wakeup_waiters(int exited_pid);
 const char *proc_state_name(int state);
 void schedule(void);
 

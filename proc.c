@@ -12,6 +12,8 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
     p->wakeup_tick = 0;
+    p->wait_pid = -1;
+    p->waited_by = -1;
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -101,6 +103,24 @@ void proc_wakeup_sleepers(unsigned long now) {
             procs[i].wakeup_tick <= now) {
             procs[i].state = PROC_RUNNABLE;
         }
+    }
+}
+void proc_wakeup_waiters(int exited_pid) {
+    int waiter_pid;
+
+    if (exited_pid < 0 || exited_pid >= PROC_NUM) {
+        return;
+    }
+
+    waiter_pid = procs[exited_pid].waited_by;
+    if (waiter_pid < 0 || waiter_pid >= PROC_NUM) {
+        return;
+    }
+
+    if (procs[waiter_pid].state == PROC_BLOCKED &&
+        procs[waiter_pid].wait_pid == exited_pid) {
+        procs[waiter_pid].wait_pid = -1;
+        procs[waiter_pid].state = PROC_RUNNABLE;
     }
 }
 
