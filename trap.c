@@ -133,21 +133,17 @@ void trap_handler(struct trap_frame *tf) {
                     break;
                 }
 
-                if (proc_is_zombie(target_pid)) {
-                    if (procs[target_pid].waited_by == -1) {
-                        procs[target_pid].waited_by = current->pid;
-                    }
-                    tf->a0 = 0;
-                    break;
+                procs[target_pid].waited_by = current->pid;
+
+                if (!proc_is_zombie(target_pid)) {
+                    current->wait_pid = target_pid;
+                    current->state = PROC_BLOCKED;
+                    schedule();
                 }
 
-                procs[target_pid].waited_by = current->pid;
-                current->wait_pid = target_pid;
-                current->state = PROC_BLOCKED;
+                proc_reap(target_pid);
                 tf->a0 = 0;
-
-                schedule();
-                return;
+                break;
             }
 
             case SYS_EXIT: {

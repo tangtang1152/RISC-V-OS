@@ -123,6 +123,16 @@ void proc_wakeup_waiters(int exited_pid) {
         procs[waiter_pid].state = PROC_RUNNABLE;
     }
 }
+void proc_reap(int pid) {
+    if (pid < 0 || pid >= PROC_NUM) {
+        return;
+    }
+
+    procs[pid].state = PROC_UNUSED;
+    procs[pid].waited_by = -1;
+    procs[pid].wait_pid = -1;
+    procs[pid].wakeup_tick = 0;
+}
 
 const char *proc_state_name(int state) {
     switch (state) {
