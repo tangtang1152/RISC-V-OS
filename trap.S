@@ -4,6 +4,7 @@
 .globl kernel_entry
 .globl user_entry
 .globl user_entry2
+.global user_return
 
 .balign 4
 kernel_entry:
@@ -74,7 +75,10 @@ kernel_entry:
 
     mv a0, t1
     call trap_handler
+    j user_return
 
+.balign 4
+user_return:
     # after handler, reload current scratch/tf because current may have changed
     la t0, current
     ld t0, 0(t0)              # t0 = current

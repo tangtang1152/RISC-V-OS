@@ -4,6 +4,7 @@
 #include "timer.h"
 
 extern void kernel_entry(void);
+extern void user_return(void);
 
 void kmain(void) {
     unsigned long sstatus;
@@ -18,7 +19,6 @@ void kmain(void) {
     timer_init();
     print_str("timer init done\n");
 
-    w_sepc(current->tf.sepc); 
     w_sscratch((unsigned long)&current->scratch);
 
     sstatus = r_sstatus();
@@ -27,8 +27,7 @@ void kmain(void) {
 
     print_str("about to enter user mode\n");
 
-    asm volatile("mv sp, %0" :: "r"(current->tf.sp));
-    asm volatile("sret");
+    user_return();
 
     while (1) { }
 }
