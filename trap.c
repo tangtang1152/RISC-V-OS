@@ -61,7 +61,9 @@ void trap_handler(struct trap_frame *tf) {
             case SYS_GET_MAGIC:
                 tf->a0 = 'Z';
                 break;
-
+            case SYS_GETPID:
+                tf->a0 = current->pid;
+                break;
             case SYS_YIELD: {
                 int old_pid = current->pid;
 

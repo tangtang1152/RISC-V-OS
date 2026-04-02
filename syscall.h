@@ -7,8 +7,9 @@
 #define SYS_ADD       4
 #define SYS_EXIT      5
 #define SYS_PRINTHEX  6
-#define SYS_YIELD 7
+#define SYS_YIELD     7
 #define SYS_SLEEP     8
+#define SYS_GETPID    9
 
 long sys_putchar(char ch);
 long sys_printstr(const char *s);
@@ -18,5 +19,6 @@ long sys_exit(long code);
 long sys_printhex(unsigned long x);
 long sys_yield(void);
 long sys_sleep(long tick_count);
+long sys_getpid(void);
 
 #endif

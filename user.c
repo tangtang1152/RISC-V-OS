@@ -3,17 +3,26 @@
 void user_main(void)
 {
     while (1) {
-        sys_printstr("[USER1] before sleep\n");
+        sys_printstr("[USER] pid=");
+        sys_printhex((unsigned long)sys_getpid());
+        sys_printstr(" before sleep\n");
+
         sys_sleep(5);
-        sys_printstr("[USER1] after sleep\n");
+
+        sys_printstr("[USER] pid=");
+        sys_printhex((unsigned long)sys_getpid());
+        sys_printstr(" after sleep\n");
+
         for (volatile int i = 0; i < 100000; i++) { }
     }
 }
-
 void user_main2(void)
 {
     while (1) {
-        sys_printstr("[USER2] running\n");
+        sys_printstr("[USER] pid=");
+        sys_printhex((unsigned long)sys_getpid());
+        sys_printstr(" running\n");
+
         for (volatile int i = 0; i < 100000; i++) { }
     }
 }
@@ -82,4 +91,7 @@ long sys_yield(void) {
 }
 long sys_sleep(long tick_count) {
     return do_syscall1(SYS_SLEEP, tick_count);
+}
+long sys_getpid(void) {
+    return do_syscall0(SYS_GETPID);
 }
