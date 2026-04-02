@@ -84,15 +84,19 @@ int proc_switch(void) {
     return -1;
 }
 
-// 如果一直没有 runnable，只在第一次进入 idle 时打印一次。
 void schedule(void) {
     int idle_printed = 0;
 
-    while (proc_switch() < 0) {
+    while (1) {
+        if (proc_switch() == 0) {
+            return;
+        }
+
         if (!idle_printed) {
             print_str("[KERNEL] schedule: no runnable process, wait for interrupt\n");
             idle_printed = 1;
         }
+
         asm volatile("wfi");
     }
 }
@@ -106,7 +110,6 @@ void proc_wakeup_sleepers(unsigned long now) {
         }
     }
 }
-
 void proc_wakeup_waiters(int exited_pid) {
     int waiter_pid;
 
@@ -178,6 +181,14 @@ const char *proc_state_name(int state) {
         default:            return "UNKNOWN";
     }
 }
+const char *proc_block_reason_name(int reason) {
+    switch (reason) {
+        case PROC_BLOCK_NONE:  return "NONE";
+        case PROC_BLOCK_SLEEP: return "SLEEP";
+        case PROC_BLOCK_WAIT:  return "WAIT";
+        default:               return "UNKNOWN";
+    }
+}
 
 void proc_dump(void) {
     print_str("[KERNEL] proc dump begin\n");
@@ -197,13 +208,4 @@ void proc_dump(void) {
     }
 
     print_str("[KERNEL] proc dump end\n");
-}
-
-const char *proc_block_reason_name(int reason) {
-    switch (reason) {
-        case PROC_BLOCK_NONE:  return "NONE";
-        case PROC_BLOCK_SLEEP: return "SLEEP";
-        case PROC_BLOCK_WAIT:  return "WAIT";
-        default:               return "UNKNOWN";
-    }
 }

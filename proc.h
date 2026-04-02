@@ -55,7 +55,8 @@ void proc_wakeup_waiters(int exited_pid);
 void proc_reap(int pid);
 
 const char *proc_state_name(int state);
-void schedule(void);
 const char *proc_block_reason_name(int reason);
+
+void schedule(void);
 
 #endif
