@@ -25,11 +25,8 @@ void trap_handler(struct trap_frame *tf) {
             if (current->state == PROC_RUNNING) {
                 current->state = PROC_RUNNABLE;
             }
-
-            if (proc_switch() < 0) {
-                current->state = PROC_RUNNING;
-            }
-
+            // 即使系统里只有当前进程一个 runnable,它也会被 schedule 重新选中。
+            schedule();
             return;
         }
 
