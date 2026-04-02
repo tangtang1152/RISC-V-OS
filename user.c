@@ -4,7 +4,7 @@ void user_main(void)
 {
     sys_printstr("[USER0] wait pid=1\n");
     sys_wait(1);
-    sys_printstr("[USER0] wait returned, pid=1 reaped\n");
+    sys_printstr("[USER0] wait returned, pid=1 exited\n");
 
     while (1) {
         sys_yield();

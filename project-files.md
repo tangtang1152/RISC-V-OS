@@ -1,6 +1,6 @@
 # Project Files Export
 
-Export time: 4/2/2026, 12:46:10 AM
+Export time: 4/3/2026, 2:02:04 AM
 
 Source directory: `riscv`
 
@@ -12,7 +12,6 @@ Output file: `project-files.md`
 riscv
 ├── .vscode
 ├── .gitignore
-├── kernel.c
 ├── kmain.c
 ├── linker.ld
 ├── Makefile
@@ -33,17 +32,17 @@ riscv
 
 ## File Statistics
 
-- Total files: 18
-- Total size: 19.2 KB
+- Total files: 17
+- Total size: 24.8 KB
 
 ### File Type Distribution
 
 | Extension | Files | Total Size |
 | --- | --- | --- |
-| .c | 7 | 10.4 KB |
-| .h | 6 | 4.1 KB |
-| (no extension) | 2 | 771 bytes |
-| .s | 2 | 3.3 KB |
+| .c | 6 | 15.4 KB |
+| .h | 6 | 4.7 KB |
+| (no extension) | 2 | 753 bytes |
+| .s | 2 | 3.4 KB |
 | .ld | 1 | 657 bytes |
 
 ## File Contents
@@ -58,13 +57,6 @@ kernel.dump
 project-files.md
 ```
 
-### kernel.c
-
-```c
-// kernel.c
-
-```
-
 ### kmain.c
 
 ```c
@@ -75,6 +67,7 @@ project-files.md
 #include "timer.h"
 
 extern void kernel_entry(void);
+extern void user_return(void);
 
 void kmain(void) {
     unsigned long sstatus;
@@ -89,7 +82,6 @@ void kmain(void) {
     timer_init();
     print_str("timer init done\n");
 
-    w_sepc(current->tf.sepc); 
     w_sscratch((unsigned long)&current->scratch);
 
     sstatus = r_sstatus();
@@ -98,8 +90,7 @@ void kmain(void) {
 
     print_str("about to enter user mode\n");
 
-    asm volatile("mv sp, %0" :: "r"(current->tf.sp));
-    asm volatile("sret");
+    user_return();
 
     while (1) { }
 }
@@ -158,8 +149,8 @@ LDFLAGS = -T linker.ld -nostdlib
 
 all: kernel.bin
 
-kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c kernel.c proc.c proc.h timer.h timer.c
-	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c kernel.c proc.c timer.c $(LDFLAGS) -o kernel.elf
+kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c proc.c proc.h timer.h timer.c
+	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c proc.c timer.c $(LDFLAGS) -o kernel.elf
 
 kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary kernel.elf kernel.bin
@@ -192,6 +183,10 @@ struct proc *current = 0;
 static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
+    p->wakeup_tick = 0;
+    p->wait_pid = -1;
+    p->waited_by = -1;
+    p->block_reason = PROC_BLOCK_NONE;
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -262,11 +257,88 @@ int proc_switch(void) {
     return -1;
 }
 
+// 如果一直没有 runnable，只在第一次进入 idle 时打印一次。
+void schedule(void) {
+    int idle_printed = 0;
+
+    while (proc_switch() < 0) {
+        if (!idle_printed) {
+            print_str("[KERNEL] schedule: no runnable process, wait for interrupt\n");
+            idle_printed = 1;
+        }
+        asm volatile("wfi");
+    }
+}
+
+void proc_wakeup_sleepers(unsigned long now) {
+    for (int i = 0; i < PROC_NUM; i++) {
+        if (procs[i].state == PROC_BLOCKED &&
+            procs[i].wakeup_tick <= now) {
+            procs[i].block_reason = PROC_BLOCK_NONE;
+            procs[i].state = PROC_RUNNABLE;
+        }
+    }
+}
+
+void proc_wakeup_waiters(int exited_pid) {
+    int waiter_pid;
+
+    print_str("[KERNEL] wake_waiters: exited_pid=");
+    print_hex((unsigned long)exited_pid);
+    print_str("\n");
+
+    if (exited_pid < 0 || exited_pid >= PROC_NUM) {
+        print_str("[KERNEL] wake_waiters: invalid exited pid\n");
+        return;
+    }
+
+    waiter_pid = procs[exited_pid].waited_by;
+
+    print_str("[KERNEL] wake_waiters: waited_by=");
+    print_hex((unsigned long)waiter_pid);
+    print_str("\n");
+
+    if (waiter_pid < 0 || waiter_pid >= PROC_NUM) {
+        print_str("[KERNEL] wake_waiters: no valid waiter\n");
+        return;
+    }
+
+    print_str("[KERNEL] wake_waiters: waiter state=");
+    print_str(proc_state_name(procs[waiter_pid].state));
+    print_str(" reason=");
+    print_str(proc_block_reason_name(procs[waiter_pid].block_reason));
+    print_str(" wait_pid=");
+    print_hex((unsigned long)procs[waiter_pid].wait_pid);
+    print_str("\n");
+
+    if (procs[waiter_pid].state == PROC_BLOCKED &&
+        procs[waiter_pid].wait_pid == exited_pid) {
+        procs[waiter_pid].wait_pid = -1;
+        procs[waiter_pid].block_reason = PROC_BLOCK_NONE;
+        procs[waiter_pid].state = PROC_RUNNABLE;
+
+        print_str("[KERNEL] wake_waiters: waiter -> RUNNABLE\n");
+    }
+}
+
+void proc_reap(int pid) {
+    if (pid < 0 || pid >= PROC_NUM) {
+        return;
+    }
+
+    procs[pid].state = PROC_UNUSED;
+    procs[pid].block_reason = PROC_BLOCK_NONE;
+    procs[pid].waited_by = -1;
+    procs[pid].wait_pid = -1;
+    procs[pid].wakeup_tick = 0;
+}
+
 const char *proc_state_name(int state) {
     switch (state) {
         case PROC_UNUSED:   return "UNUSED";
         case PROC_RUNNABLE: return "RUNNABLE";
         case PROC_RUNNING:  return "RUNNING";
+        case PROC_BLOCKED:  return "BLOCKED";
         case PROC_ZOMBIE:   return "ZOMBIE";
         default:            return "UNKNOWN";
     }
@@ -280,6 +352,8 @@ void proc_dump(void) {
         print_hex((unsigned long)procs[i].pid);
         print_str(" state=");
         print_str(proc_state_name(procs[i].state));
+        print_str(" reason=");
+        print_str(proc_block_reason_name(procs[i].block_reason));
         print_str(" sepc=");
         print_hex(procs[i].tf.sepc);
         print_str(" sp=");
@@ -288,6 +362,15 @@ void proc_dump(void) {
     }
 
     print_str("[KERNEL] proc dump end\n");
+}
+
+const char *proc_block_reason_name(int reason) {
+    switch (reason) {
+        case PROC_BLOCK_NONE:  return "NONE";
+        case PROC_BLOCK_SLEEP: return "SLEEP";
+        case PROC_BLOCK_WAIT:  return "WAIT";
+        default:               return "UNKNOWN";
+    }
 }
 
 ```
@@ -309,7 +392,13 @@ enum proc_state {
     PROC_UNUSED = 0,
     PROC_RUNNABLE,
     PROC_RUNNING,
+    PROC_BLOCKED,
     PROC_ZOMBIE,
+};
+enum proc_block_reason {
+    PROC_BLOCK_NONE = 0,
+    PROC_BLOCK_SLEEP,
+    PROC_BLOCK_WAIT,
 };
 
 struct trap_scratch {
@@ -328,6 +417,10 @@ struct proc {
     char ustack[USTACK_SIZE] __attribute__((aligned(16)));
     int state;
     int pid;
+    unsigned long wakeup_tick;
+    int wait_pid;
+    int waited_by;
+    int block_reason;
 };
 
 extern struct proc *current;
@@ -336,7 +429,12 @@ extern struct proc procs[PROC_NUM];
 void proc_init(void);
 int proc_switch(void);
 void proc_dump(void);
+void proc_wakeup_sleepers(unsigned long now);
+void proc_wakeup_waiters(int exited_pid);
+void proc_reap(int pid);
 const char *proc_state_name(int state);
+void schedule(void);
+const char *proc_block_reason_name(int reason);
 
 #endif
 ```
@@ -534,7 +632,10 @@ stack_top:
 #define SYS_ADD       4
 #define SYS_EXIT      5
 #define SYS_PRINTHEX  6
-#define SYS_YIELD 7
+#define SYS_YIELD     7
+#define SYS_SLEEP     8
+#define SYS_GETPID    9
+#define SYS_WAIT      10
 
 long sys_putchar(char ch);
 long sys_printstr(const char *s);
@@ -543,6 +644,9 @@ long sys_add(long x, long y);
 long sys_exit(long code);
 long sys_printhex(unsigned long x);
 long sys_yield(void);
+long sys_sleep(long tick_count);
+long sys_wait(long pid);
+long sys_getpid(void);
 
 #endif
 ```
@@ -556,6 +660,8 @@ long sys_yield(void);
 #include "sbi.h"
 
 #define TIMER_INTERVAL 1000000UL
+
+volatile unsigned long ticks = 0;
 
 static void timer_next(void) {
     unsigned long now = r_time();
@@ -578,6 +684,7 @@ void timer_init(void) {
 }
 
 void timer_tick(void) {
+    ticks++;
     timer_next();
 }
 ```
@@ -588,6 +695,8 @@ void timer_tick(void) {
 // timer.h
 #ifndef TIMER_H
 #define TIMER_H
+
+extern volatile unsigned long ticks;
 
 void timer_init(void);
 void timer_tick(void);
@@ -609,6 +718,13 @@ void timer_tick(void);
 #define SCAUSE_INTERRUPT (1UL << 63)
 #define SCAUSE_CODE(x)   ((x) & 0xfff)
 
+static int proc_is_zombie(int pid) {
+    if (pid < 0 || pid >= PROC_NUM) {
+        return 0;
+    }
+    return procs[pid].state == PROC_ZOMBIE;
+}
+
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
 
@@ -618,17 +734,16 @@ void trap_handler(struct trap_frame *tf) {
         if (code == 5) {   // supervisor timer interrupt
             timer_tick();
 
+            proc_wakeup_sleepers(ticks);
+
             //和yield一样先存pc 但这次不需要加4 ecall+4是因为要跳过ecall
             tf->sepc = r_sepc(); 
             
             if (current->state == PROC_RUNNING) {
                 current->state = PROC_RUNNABLE;
             }
-
-            if (proc_switch() < 0) {
-                current->state = PROC_RUNNING;
-            }
-
+            // 即使系统里只有当前进程一个 runnable,它也会被 schedule 重新选中。
+            schedule();
             return;
         }
 
@@ -663,7 +778,9 @@ void trap_handler(struct trap_frame *tf) {
             case SYS_GET_MAGIC:
                 tf->a0 = 'Z';
                 break;
-
+            case SYS_GETPID:
+                tf->a0 = current->pid;
+                break;
             case SYS_YIELD: {
                 int old_pid = current->pid;
 
@@ -674,20 +791,78 @@ void trap_handler(struct trap_frame *tf) {
                     current->state = PROC_RUNNABLE;
                 }
 
-                if (proc_switch() < 0) {
-                    current->state = PROC_RUNNING;
-                    print_str("[KERNEL] yield: no runnable proc, keep pid=");
-                    print_hex((unsigned long)old_pid);
-                    print_str("\n");
-                } else {
-                    print_str("[KERNEL] yield: pid=");
-                    print_hex((unsigned long)old_pid);
-                    print_str(" -> pid=");
-                    print_hex((unsigned long)current->pid);
-                    print_str("\n");
-                }
+                schedule();
+
+                print_str("[KERNEL] yield: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" -> pid=");
+                print_hex((unsigned long)current->pid);
+                print_str("\n");
 
                 return;
+            }
+
+            case SYS_SLEEP: {
+                unsigned long n = tf->a0;
+                int old_pid = current->pid;
+
+                tf->sepc = r_sepc() + 4;
+                tf->a0 = 0;
+
+                current->wakeup_tick = ticks + n;
+                current->state = PROC_BLOCKED;
+                current->block_reason = PROC_BLOCK_SLEEP;
+
+                print_str("[KERNEL] sleep: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" until tick=");
+                print_hex(current->wakeup_tick);
+                print_str("\n");
+
+                schedule();
+                return;
+            }
+
+            case SYS_WAIT: {
+                int target_pid = (int)tf->a0;
+
+                tf->sepc = r_sepc() + 4;
+
+                if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                if (current->wait_pid != -1) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                if (procs[target_pid].waited_by != -1 &&
+                    procs[target_pid].waited_by != current->pid) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                procs[target_pid].waited_by = current->pid;
+                print_str("target waited_by=");
+                print_hex((unsigned long)procs[target_pid].waited_by);
+                print_str("\n");
+                print_str("target pid=");
+                print_hex((unsigned long)procs[target_pid].pid);
+                print_str("\n");
+
+                if (!proc_is_zombie(target_pid)) {
+                    current->wait_pid = target_pid;
+                    current->state = PROC_BLOCKED;
+                    current->block_reason = PROC_BLOCK_WAIT;
+                    schedule();
+                }
+                else
+                    proc_reap(target_pid);
+                
+                tf->a0 = 0;
+                break;
             }
 
             case SYS_EXIT: {
@@ -699,11 +874,14 @@ void trap_handler(struct trap_frame *tf) {
 
                 current->state = PROC_ZOMBIE;
 
-                if (proc_switch() < 0) {
-                    print_str("[KERNEL] no runnable proc\n");
-                    proc_dump();
-                    while (1) {}
-                }
+                print_str("waited_by=");
+                print_hex((unsigned long)current->waited_by);
+                print_str("\n");
+
+                proc_wakeup_waiters(current->pid);
+                proc_dump();
+
+                schedule();
 
                 print_str("[KERNEL] exit switch: pid=");
                 print_hex((unsigned long)old_pid);
@@ -806,6 +984,7 @@ struct trap_frame {
 .globl kernel_entry
 .globl user_entry
 .globl user_entry2
+.global user_return
 
 .balign 4
 kernel_entry:
@@ -876,7 +1055,10 @@ kernel_entry:
 
     mv a0, t1
     call trap_handler
+    j user_return
 
+.balign 4
+user_return:
     # after handler, reload current scratch/tf because current may have changed
     la t0, current
     ld t0, 0(t0)              # t0 = current
@@ -952,18 +1134,20 @@ user_entry2:
 
 void user_main(void)
 {
+    sys_printstr("[USER0] wait pid=1\n");
+    sys_wait(1);
+    sys_printstr("[USER0] wait returned, pid=1 reaped\n");
+
     while (1) {
-        sys_printstr("[USER1] hello\n");
-        for (volatile int i = 0; i < 100000; i++) { }
+        sys_yield();
     }
 }
-
 void user_main2(void)
 {
-    while (1) {
-        sys_printstr("[USER2] hello\n");
-        for (volatile int i = 0; i < 100000; i++) { }
-    }
+    sys_printstr("[USER1] exit now\n");
+    sys_exit(0);
+
+    while (1) { }
 }
 
 static inline long do_syscall0(long n) {
@@ -1027,6 +1211,15 @@ long sys_printhex(unsigned long x) {
 }
 long sys_yield(void) {
     return do_syscall0(SYS_YIELD);
+}
+long sys_sleep(long tick_count) {
+    return do_syscall1(SYS_SLEEP, tick_count);
+}
+long sys_wait(long pid) {
+    return do_syscall1(SYS_WAIT, pid);
+}
+long sys_getpid(void) {
+    return do_syscall0(SYS_GETPID);
 }
 ```
 

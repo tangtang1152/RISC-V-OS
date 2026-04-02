@@ -142,8 +142,24 @@ void trap_handler(struct trap_frame *tf) {
                     current->block_reason = PROC_BLOCK_WAIT;
                     schedule();
                 }
-
-                proc_reap(target_pid);
+                // else{
+                //     proc_reap(target_pid);
+                // }
+                /*
+                * Current model note:
+                * schedule() only selects a new current process for trap return.
+                * It does not suspend this kernel execution point and later resume
+                * from the same C location as a true in-kernel blocking continuation.
+                *
+                * So wait currently supports:
+                *   - single waiter registration
+                *   - BLOCKED(WAIT)
+                *   - wakeup on target exit
+                *
+                * But zombie reap is intentionally NOT performed here yet.
+                * Reap/exit-result consumption will be revisited after the blocking/
+                * wakeup model is made more complete.
+                */
                 tf->a0 = 0;
                 break;
             }
@@ -156,10 +172,7 @@ void trap_handler(struct trap_frame *tf) {
                 print_str("\n");
 
                 current->state = PROC_ZOMBIE;
-
                 proc_wakeup_waiters(current->pid);
-                proc_dump();
-
                 schedule();
 
                 print_str("[KERNEL] exit switch: pid=");

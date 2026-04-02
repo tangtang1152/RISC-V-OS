@@ -81,7 +81,6 @@ int proc_switch(void) {
             return 0;
         }
     }
-
     return -1;
 }
 
@@ -149,6 +148,14 @@ void proc_wakeup_waiters(int exited_pid) {
     }
 }
 
+/*
+ * Reserved for future zombie resource reclamation.
+ *
+ * Note: this helper is intentionally not wired into SYS_WAIT yet.
+ * The current kernel model supports wait-as-block/wakeup, but does
+ * not yet model a true in-kernel suspended continuation that would
+ * make wait+reap semantics clean at the current control-flow level.
+ */
 void proc_reap(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
         return;

@@ -50,7 +50,10 @@ int proc_switch(void);
 void proc_dump(void);
 void proc_wakeup_sleepers(unsigned long now);
 void proc_wakeup_waiters(int exited_pid);
+
+/* Reserved for future zombie reclamation; not used by active wait path yet. */
 void proc_reap(int pid);
+
 const char *proc_state_name(int state);
 void schedule(void);
 const char *proc_block_reason_name(int reason);
