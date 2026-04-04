@@ -44,142 +44,151 @@ void trap_handler(struct trap_frame *tf) {
         while (1) {}
     }
 
-    if (scause == 8) {   // Environment call from U-mode
-        switch (tf->a7) {
-            case SYS_PUTCHAR:
-                putchar((char)tf->a0);
-                tf->a0 = 0;
-                break;
+if (scause == 8) {   // Environment call from U-mode
+    int advance_sepc = 1;
+    int need_schedule = 0;
+    int old_pid = -1;
 
-            case SYS_PRINTSTR:
-                print_str((const char *)tf->a0);
-                tf->a0 = 0;
-                break;
+    switch (tf->a7) {
+        case SYS_PUTCHAR:
+            putchar((char)tf->a0);
+            tf->a0 = 0;
+            break;
 
-            case SYS_PRINTHEX:
-                print_hex(tf->a0);
-                tf->a0 = 0;
-                break;
+        case SYS_PRINTSTR:
+            print_str((const char *)tf->a0);
+            tf->a0 = 0;
+            break;
 
-            case SYS_ADD:
-                tf->a0 = tf->a0 + tf->a1;
-                break;
+        case SYS_PRINTHEX:
+            print_hex(tf->a0);
+            tf->a0 = 0;
+            break;
 
-            case SYS_GET_MAGIC:
-                tf->a0 = 'Z';
-                break;
-            case SYS_GETPID:
-                tf->a0 = current->pid;
-                break;
-            case SYS_YIELD: {
-                int old_pid = current->pid;
+        case SYS_ADD:
+            tf->a0 = tf->a0 + tf->a1;
+            break;
 
-                tf->sepc = r_sepc() + 4;
-                tf->a0 = 0;
+        case SYS_GET_MAGIC:
+            tf->a0 = 'Z';
+            break;
 
-                if (current->state == PROC_RUNNING) {
-                    current->state = PROC_RUNNABLE;
-                }
+        case SYS_GETPID:
+            tf->a0 = current->pid;
+            break;
 
-                schedule();
+        case SYS_YIELD:
+            old_pid = current->pid;
+            tf->a0 = 0;
 
-                print_str("[KERNEL] yield: pid=");
-                print_hex((unsigned long)old_pid);
-                print_str(" -> pid=");
-                print_hex((unsigned long)current->pid);
-                print_str("\n");
-
-                return;
+            if (current->state == PROC_RUNNING) {
+                current->state = PROC_RUNNABLE;
             }
 
-            case SYS_SLEEP: {
-                unsigned long n = tf->a0;
-                int old_pid = current->pid;
+            need_schedule = 1;
+            break;
 
-                tf->sepc = r_sepc() + 4;
-                tf->a0 = 0;
+        case SYS_SLEEP: {
+            unsigned long n = tf->a0;
 
-                current->wakeup_tick = ticks + n;
-                current->state = PROC_BLOCKED;
-                current->block_reason = PROC_BLOCK_SLEEP;
+            old_pid = current->pid;
+            tf->a0 = 0;
 
-                print_str("[KERNEL] sleep: pid=");
-                print_hex((unsigned long)old_pid);
-                print_str(" until tick=");
-                print_hex(current->wakeup_tick);
-                print_str("\n");
+            current->wakeup_tick = ticks + n;
+            current->state = PROC_BLOCKED;
+            current->block_reason = PROC_BLOCK_SLEEP;
 
-                schedule();
-                return;
-            }
+            print_str("[KERNEL] sleep: pid=");
+            print_hex((unsigned long)old_pid);
+            print_str(" until tick=");
+            print_hex(current->wakeup_tick);
+            print_str("\n");
 
-            case SYS_WAIT: {
-                int target_pid = (int)tf->a0;
-
-                tf->sepc = r_sepc() + 4;
-
-                if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
-                    tf->a0 = -1;
-                    break;
-                }
-
-                if (current->wait_pid != -1) {
-                    tf->a0 = -1;
-                    break;
-                }
-
-                if (procs[target_pid].waited_by != -1 &&
-                    procs[target_pid].waited_by != current->pid) {
-                    tf->a0 = -1;
-                    break;
-                }
-
-                procs[target_pid].waited_by = current->pid;
-
-                if (proc_is_zombie(target_pid)) {
-                    tf->a0 = procs[target_pid].exit_code;
-                    break;
-                }
-                
-                current->wait_pid = target_pid;
-                current->state = PROC_BLOCKED;
-                current->block_reason = PROC_BLOCK_WAIT;
-                schedule();
-                return;
-            }
-
-            case SYS_EXIT: {
-                int old_pid = current->pid;
-
-                print_str("[KERNEL] exit: pid=");
-                print_hex((unsigned long)old_pid);
-                print_str("\n");
-
-                current->exit_code = (int)tf->a0;
-                current->state = PROC_ZOMBIE;
-                proc_wakeup_waiters(current->pid);
-                schedule();
-
-                print_str("[KERNEL] exit switch: pid=");
-                print_hex((unsigned long)old_pid);
-                print_str(" -> pid=");
-                print_hex((unsigned long)current->pid);
-                print_str("\n");
-
-                return;
-            }
-
-            default:
-                print_str("[KERNEL] unknown syscall, a7=");
-                print_hex(tf->a7);
-                print_str("\n");
-                tf->a0 = -1;
-                break;
+            need_schedule = 1;
+            break;
         }
 
-        tf->sepc = r_sepc() + 4;
-        return;
+        case SYS_WAIT: {
+            int target_pid = (int)tf->a0;
+
+            if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
+                tf->a0 = -1;
+                break;
+            }
+
+            if (current->wait_pid != -1) {
+                tf->a0 = -1;
+                break;
+            }
+
+            if (procs[target_pid].waited_by != -1 &&
+                procs[target_pid].waited_by != current->pid) {
+                tf->a0 = -1;
+                break;
+            }
+
+            procs[target_pid].waited_by = current->pid;
+
+            if (proc_is_zombie(target_pid)) {
+                tf->a0 = procs[target_pid].exit_code;
+                break;
+            }
+
+            current->wait_pid = target_pid;
+            current->state = PROC_BLOCKED;
+            current->block_reason = PROC_BLOCK_WAIT;
+            need_schedule = 1;
+            break;
+        }
+
+        case SYS_EXIT:
+            old_pid = current->pid;
+
+            print_str("[KERNEL] exit: pid=");
+            print_hex((unsigned long)old_pid);
+            print_str("\n");
+
+            current->exit_code = (int)tf->a0;
+            current->state = PROC_ZOMBIE;
+            proc_wakeup_waiters(current->pid);
+
+            need_schedule = 1;
+            break;
+
+        default:
+            print_str("[KERNEL] unknown syscall, a7=");
+            print_hex(tf->a7);
+            print_str("\n");
+            tf->a0 = -1;
+            break;
     }
+
+    if (advance_sepc) {
+        tf->sepc = r_sepc() + 4;
+    } else {
+        tf->sepc = r_sepc();
+    }
+
+    if (need_schedule) {
+        schedule();
+
+        if (tf->a7 == SYS_YIELD) {
+            print_str("[KERNEL] yield: pid=");
+            print_hex((unsigned long)old_pid);
+            print_str(" -> pid=");
+            print_hex((unsigned long)current->pid);
+            print_str("\n");
+        } else if (tf->a7 == SYS_EXIT) {
+            print_str("[KERNEL] exit switch: pid=");
+            print_hex((unsigned long)old_pid);
+            print_str(" -> pid=");
+            print_hex((unsigned long)current->pid);
+            print_str("\n");
+        }
+    }
+
+    return;
+}
 
     print_str("[KERNEL] unhandled trap, scause=");
     print_hex(scause);
