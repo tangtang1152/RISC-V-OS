@@ -3,8 +3,11 @@
 void user_main(void)
 {
     sys_printstr("[USER0] wait pid=1\n");
-    sys_wait(1);
-    sys_printstr("[USER0] wait returned, pid=1 exited\n");
+    long code = sys_wait(1);
+    sys_printstr("[USER0] wait returned, exit code=");
+    sys_printhex((unsigned long)code);
+    sys_printstr("\n");
+
 
     while (1) {
         sys_yield();
@@ -13,7 +16,7 @@ void user_main(void)
 void user_main2(void)
 {
     sys_printstr("[USER1] exit now\n");
-    sys_exit(0);
+    sys_exit(42);
 
     while (1) { }
 }

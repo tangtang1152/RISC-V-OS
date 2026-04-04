@@ -15,6 +15,7 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->wait_pid = -1;
     p->waited_by = -1;
     p->block_reason = PROC_BLOCK_NONE;
+    p->exit_code = 0;
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -144,6 +145,7 @@ void proc_wakeup_waiters(int exited_pid) {
     if (procs[waiter_pid].state == PROC_BLOCKED &&
         procs[waiter_pid].wait_pid == exited_pid) {
         procs[waiter_pid].wait_pid = -1;
+        procs[waiter_pid].tf.a0 = procs[exited_pid].exit_code;
         procs[waiter_pid].block_reason = PROC_BLOCK_NONE;
         procs[waiter_pid].state = PROC_RUNNABLE;
 

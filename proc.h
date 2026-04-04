@@ -40,6 +40,7 @@ struct proc {
     int wait_pid;
     int waited_by;
     int block_reason;
+    int exit_code;
 };
 
 extern struct proc *current;

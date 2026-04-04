@@ -136,32 +136,16 @@ void trap_handler(struct trap_frame *tf) {
 
                 procs[target_pid].waited_by = current->pid;
 
-                if (!proc_is_zombie(target_pid)) {
-                    current->wait_pid = target_pid;
-                    current->state = PROC_BLOCKED;
-                    current->block_reason = PROC_BLOCK_WAIT;
-                    schedule();
+                if (proc_is_zombie(target_pid)) {
+                    tf->a0 = procs[target_pid].exit_code;
+                    break;
                 }
-                // else{
-                //     proc_reap(target_pid);
-                // }
-                /*
-                * Current model note:
-                * schedule() only selects a new current process for trap return.
-                * It does not suspend this kernel execution point and later resume
-                * from the same C location as a true in-kernel blocking continuation.
-                *
-                * So wait currently supports:
-                *   - single waiter registration
-                *   - BLOCKED(WAIT)
-                *   - wakeup on target exit
-                *
-                * But zombie reap is intentionally NOT performed here yet.
-                * Reap/exit-result consumption will be revisited after the blocking/
-                * wakeup model is made more complete.
-                */
-                tf->a0 = 0;
-                break;
+                
+                current->wait_pid = target_pid;
+                current->state = PROC_BLOCKED;
+                current->block_reason = PROC_BLOCK_WAIT;
+                schedule();
+                return;
             }
 
             case SYS_EXIT: {
@@ -171,6 +155,7 @@ void trap_handler(struct trap_frame *tf) {
                 print_hex((unsigned long)old_pid);
                 print_str("\n");
 
+                current->exit_code = (int)tf->a0;
                 current->state = PROC_ZOMBIE;
                 proc_wakeup_waiters(current->pid);
                 schedule();
