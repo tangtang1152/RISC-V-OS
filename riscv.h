@@ -68,4 +68,18 @@ static inline unsigned long r_time(void) {
     return x;
 }
 
+static inline void w_satp(unsigned long x) {
+    asm volatile("csrw satp, %0" : : "r"(x));
+}
+
+static inline unsigned long r_satp(void) {
+    unsigned long x;
+    asm volatile("csrr %0, satp" : "=r"(x));
+    return x;
+}
+
+static inline void sfence_vma(void) {
+    asm volatile("sfence.vma zero, zero");
+}
+
 #endif

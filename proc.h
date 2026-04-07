@@ -2,6 +2,7 @@
 #define PROC_H
 
 #include "trap.h"
+#include "vm.h"
 
 #define PROC_NUM 2
 #define KSTACK_SIZE 4096
@@ -41,6 +42,7 @@ struct proc {
     int waited_by;
     int block_reason;
     int exit_code;
+    pagetable_t user_pagetable;
 };
 
 extern struct proc *current;

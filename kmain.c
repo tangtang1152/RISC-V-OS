@@ -2,6 +2,7 @@
 #include "riscv.h"
 #include "proc.h"
 #include "timer.h"
+#include "vm.h"
 
 extern void kernel_entry(void);
 extern void user_return(void);
@@ -18,6 +19,8 @@ void kmain(void) {
     
     timer_init();
     print_str("timer init done\n");
+
+    vm_init();
 
     w_sscratch((unsigned long)&current->scratch);
 

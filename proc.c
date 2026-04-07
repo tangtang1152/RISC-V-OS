@@ -1,6 +1,7 @@
 #include "proc.h"
 #include "riscv.h"
 #include "sbi.h"
+#include "memlayout.h"
 
 extern void user_entry(void);
 extern void user_entry2(void);
@@ -16,6 +17,7 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->waited_by = -1;
     p->block_reason = PROC_BLOCK_NONE;
     p->exit_code = 0;
+    p->user_pagetable = 0;
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -25,6 +27,12 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->scratch.kstack_top = (unsigned long)(p->kstack + KSTACK_SIZE);
 
     p->tf.ra = 0;
+
+    /*
+    * Current stage: user stack still uses the per-proc backing buffer.
+    * After virtual memory is introduced, tf.sp should become a user
+    * virtual address such as USER_STACK_TOP.
+    */
     p->tf.sp = (unsigned long)(p->ustack + USTACK_SIZE);
     p->tf.gp = 0;
     p->tf.tp = 0;
@@ -66,6 +74,9 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
 void proc_init(void) {
     init_proc_context(&procs[0], 0, (unsigned long)user_entry);
     init_proc_context(&procs[1], 1, (unsigned long)user_entry2);
+
+    procs[0].user_pagetable = vm_make_user_pagetable(0);
+    procs[1].user_pagetable = vm_make_user_pagetable(1);
 
     current = &procs[0];
     current->state = PROC_RUNNING;
