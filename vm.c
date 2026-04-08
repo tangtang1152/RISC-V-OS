@@ -4,8 +4,8 @@
 #include "riscv.h"
 #include "memlayout.h"
 
-extern void user_entry(void);
-extern void user_entry2(void);
+extern char __usertext_start[];
+extern char __usertext_end[];
 
 #define USER_PT_PAGE_COUNT (4 + KERNEL_L0_TABLES)
 
@@ -52,13 +52,6 @@ static inline unsigned long pte_to_pa(pte_t pte) {
     return ((pte >> 10) << PAGE_SHIFT);
 }
 
-static unsigned long user_entry_pa_for_pid(int pid) {
-    if (pid == 0) {
-        return (unsigned long)user_entry;
-    }
-    return (unsigned long)user_entry2;
-}
-
 void vm_init(void) {
     for (int p = 0; p < PROC_NUM; p++) {
         for (int table = 0; table < USER_PT_PAGE_COUNT; table++) {
@@ -79,6 +72,11 @@ void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned lo
     pte_t *l2 = (pte_t *)pt;
     pte_t *l1;
     pte_t *l0;
+    unsigned long leaf_perm = perm | PTE_A;
+
+    if (perm & PTE_W) {
+        leaf_perm |= PTE_D;
+    }
 
     if (!(l2[vpn2(va)] & PTE_V)) {
         print_str("[KERNEL] vm_map_page: missing l1 table\n");
@@ -92,7 +90,7 @@ void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned lo
     }
     l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
 
-    l0[vpn0(va)] = pa_to_pte(pa) | perm | PTE_V;
+    l0[vpn0(va)] = pa_to_pte(pa) | leaf_perm | PTE_V;
 }
 
 pagetable_t vm_make_user_pagetable(int pid) {
@@ -156,13 +154,8 @@ pagetable_t vm_make_user_pagetable(int pid) {
         }
     }
 
-    /*
-     * Temporarily expose a small linked user-code window as user executable.
-     * This lets existing user_entry/user_main code keep running at its current
-     * linked virtual address while we bring up VM incrementally.
-     */
-    code_start = page_down(user_entry_pa_for_pid(pid));
-    code_end = page_up(code_start + USER_CODE_WINDOW_SIZE);
+    code_start = page_down((unsigned long)__usertext_start);
+    code_end = page_up((unsigned long)__usertext_end);
 
     for (unsigned long va = code_start; va < code_end; va += PAGE_SIZE) {
         vm_map_page((pagetable_t)l2, va, va, PTE_R | PTE_X | PTE_U);

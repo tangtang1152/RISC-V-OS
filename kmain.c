@@ -21,8 +21,8 @@ void kmain(void) {
     timer_init();
     print_str("timer init done\n");
 
-    vm_switch_to_user(current->user_pagetable);
     w_sscratch((unsigned long)&current->scratch);
+    vm_switch_to_user(current->user_pagetable);
 
     sstatus = r_sstatus();
     sstatus &= ~(1UL << 8);   // clear SPP -> sret returns to U-mode

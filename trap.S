@@ -133,13 +133,17 @@ user_return:
 
     sret
 
-.balign 4
+.section .usertext
+.balign 4096
+.globl user_entry
+.globl user_entry2
+
 user_entry:
     call user_main
 1:
     j 1b
 
-.balign 4
+.balign 4096
 user_entry2:
     call user_main2
 2:
