@@ -1,6 +1,6 @@
 # Project Files Export
 
-Export time: 4/3/2026, 2:02:04 AM
+Export time: 4/8/2026, 5:12:24 PM
 
 Source directory: `riscv`
 
@@ -15,6 +15,7 @@ riscv
 ├── kmain.c
 ├── linker.ld
 ├── Makefile
+├── memlayout.h
 ├── proc.c
 ├── proc.h
 ├── riscv.h
@@ -27,21 +28,23 @@ riscv
 ├── trap.c
 ├── trap.h
 ├── trap.S
-└── user.c
+├── user.c
+├── vm.c
+└── vm.h
 ```
 
 ## File Statistics
 
-- Total files: 17
-- Total size: 24.8 KB
+- Total files: 20
+- Total size: 32.1 KB
 
 ### File Type Distribution
 
 | Extension | Files | Total Size |
 | --- | --- | --- |
-| .c | 6 | 15.4 KB |
-| .h | 6 | 4.7 KB |
-| (no extension) | 2 | 753 bytes |
+| .h | 8 | 6.7 KB |
+| .c | 7 | 20.6 KB |
+| (no extension) | 2 | 780 bytes |
 | .s | 2 | 3.4 KB |
 | .ld | 1 | 657 bytes |
 
@@ -65,6 +68,7 @@ project-files.md
 #include "riscv.h"
 #include "proc.h"
 #include "timer.h"
+#include "vm.h"
 
 extern void kernel_entry(void);
 extern void user_return(void);
@@ -74,6 +78,7 @@ void kmain(void) {
 
     print_str("kmain enter\n");
 
+    vm_init();
     proc_init();
 
     w_stvec(kernel_entry);
@@ -82,6 +87,7 @@ void kmain(void) {
     timer_init();
     print_str("timer init done\n");
 
+    vm_switch_to_user(current->user_pagetable);
     w_sscratch((unsigned long)&current->scratch);
 
     sstatus = r_sstatus();
@@ -149,8 +155,8 @@ LDFLAGS = -T linker.ld -nostdlib
 
 all: kernel.bin
 
-kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c proc.c proc.h timer.h timer.c
-	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c proc.c timer.c $(LDFLAGS) -o kernel.elf
+kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c proc.c proc.h timer.h timer.c vm.h vm.c memlayout.h
+	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c proc.c timer.c vm.c $(LDFLAGS) -o kernel.elf
 
 kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary kernel.elf kernel.bin
@@ -166,6 +172,40 @@ clean:
 	rm -f kernel.elf kernel.bin
 ```
 
+### memlayout.h
+
+```plaintext
+// memlayout.h
+#ifndef MEMLAYOUT_H
+#define MEMLAYOUT_H
+
+/*
+ * Intended future user virtual address layout.
+ */
+#define USER_BASE             0x0000000000001000UL
+#define USER_STACK_TOP        0x0000000040000000UL
+#define USER_STACK_SIZE       0x0000000000001000UL
+
+/*
+ * Shared kernel mapping window used by the first VM-enabled version.
+ * We map a small high-address kernel region into every user page table,
+ * supervisor-only by default, then selectively mark a user-code window
+ * as user executable.
+ */
+#define KERNEL_MAP_BASE       0x0000000080200000UL
+#define KERNEL_MAP_SIZE       0x0000000001000000UL   /* 16 MiB */
+#define KERNEL_L0_SPAN        0x0000000000200000UL   /* 2 MiB per L0 table */
+#define KERNEL_L0_TABLES      (KERNEL_MAP_SIZE / KERNEL_L0_SPAN) // 8
+
+#define USER_CODE_WINDOW_SIZE 0x0000000000010000UL   /* 64 KiB */
+
+#define PAGE_SIZE             4096UL
+#define PAGE_SHIFT            12UL
+#define PT_ENTRY_COUNT        512UL
+
+#endif
+```
+
 ### proc.c
 
 ```c
@@ -173,6 +213,7 @@ clean:
 #include "proc.h"
 #include "riscv.h"
 #include "sbi.h"
+#include "memlayout.h"
 
 extern void user_entry(void);
 extern void user_entry2(void);
@@ -187,6 +228,8 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->wait_pid = -1;
     p->waited_by = -1;
     p->block_reason = PROC_BLOCK_NONE;
+    p->exit_code = 0;
+    p->user_pagetable = vm_make_user_pagetable(pid);
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -196,7 +239,13 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->scratch.kstack_top = (unsigned long)(p->kstack + KSTACK_SIZE);
 
     p->tf.ra = 0;
-    p->tf.sp = (unsigned long)(p->ustack + USTACK_SIZE);
+
+    /*
+     * VM-enabled stage:
+     * user code still runs at its current linked high virtual address,
+     * but user stack now uses a dedicated user virtual address.
+     */
+    p->tf.sp = USER_STACK_TOP;
     p->tf.gp = 0;
     p->tf.tp = 0;
 
@@ -253,19 +302,22 @@ int proc_switch(void) {
             return 0;
         }
     }
-
     return -1;
 }
 
-// 如果一直没有 runnable，只在第一次进入 idle 时打印一次。
 void schedule(void) {
     int idle_printed = 0;
 
-    while (proc_switch() < 0) {
+    while (1) {
+        if (proc_switch() == 0) {
+            return;
+        }
+
         if (!idle_printed) {
             print_str("[KERNEL] schedule: no runnable process, wait for interrupt\n");
             idle_printed = 1;
         }
+
         asm volatile("wfi");
     }
 }
@@ -279,7 +331,6 @@ void proc_wakeup_sleepers(unsigned long now) {
         }
     }
 }
-
 void proc_wakeup_waiters(int exited_pid) {
     int waiter_pid;
 
@@ -314,6 +365,7 @@ void proc_wakeup_waiters(int exited_pid) {
     if (procs[waiter_pid].state == PROC_BLOCKED &&
         procs[waiter_pid].wait_pid == exited_pid) {
         procs[waiter_pid].wait_pid = -1;
+        procs[waiter_pid].tf.a0 = procs[exited_pid].exit_code;
         procs[waiter_pid].block_reason = PROC_BLOCK_NONE;
         procs[waiter_pid].state = PROC_RUNNABLE;
 
@@ -321,6 +373,14 @@ void proc_wakeup_waiters(int exited_pid) {
     }
 }
 
+/*
+ * Reserved for future zombie resource reclamation.
+ *
+ * Note: this helper is intentionally not wired into SYS_WAIT yet.
+ * The current kernel model supports wait-as-block/wakeup, but does
+ * not yet model a true in-kernel suspended continuation that would
+ * make wait+reap semantics clean at the current control-flow level.
+ */
 void proc_reap(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
         return;
@@ -343,6 +403,14 @@ const char *proc_state_name(int state) {
         default:            return "UNKNOWN";
     }
 }
+const char *proc_block_reason_name(int reason) {
+    switch (reason) {
+        case PROC_BLOCK_NONE:  return "NONE";
+        case PROC_BLOCK_SLEEP: return "SLEEP";
+        case PROC_BLOCK_WAIT:  return "WAIT";
+        default:               return "UNKNOWN";
+    }
+}
 
 void proc_dump(void) {
     print_str("[KERNEL] proc dump begin\n");
@@ -363,16 +431,6 @@ void proc_dump(void) {
 
     print_str("[KERNEL] proc dump end\n");
 }
-
-const char *proc_block_reason_name(int reason) {
-    switch (reason) {
-        case PROC_BLOCK_NONE:  return "NONE";
-        case PROC_BLOCK_SLEEP: return "SLEEP";
-        case PROC_BLOCK_WAIT:  return "WAIT";
-        default:               return "UNKNOWN";
-    }
-}
-
 ```
 
 ### proc.h
@@ -383,6 +441,7 @@ const char *proc_block_reason_name(int reason) {
 #define PROC_H
 
 #include "trap.h"
+#include "vm.h"
 
 #define PROC_NUM 2
 #define KSTACK_SIZE 4096
@@ -421,6 +480,8 @@ struct proc {
     int wait_pid;
     int waited_by;
     int block_reason;
+    int exit_code;
+    pagetable_t user_pagetable;
 };
 
 extern struct proc *current;
@@ -431,10 +492,14 @@ int proc_switch(void);
 void proc_dump(void);
 void proc_wakeup_sleepers(unsigned long now);
 void proc_wakeup_waiters(int exited_pid);
+
+/* Reserved for future zombie reclamation; not used by active wait path yet. */
 void proc_reap(int pid);
+
 const char *proc_state_name(int state);
-void schedule(void);
 const char *proc_block_reason_name(int reason);
+
+void schedule(void);
 
 #endif
 ```
@@ -511,6 +576,20 @@ static inline unsigned long r_time(void) {
     unsigned long x;
     asm volatile("csrr %0, time" : "=r"(x));
     return x;
+}
+
+static inline void w_satp(unsigned long x) {
+    asm volatile("csrw satp, %0" : : "r"(x));
+}
+
+static inline unsigned long r_satp(void) {
+    unsigned long x;
+    asm volatile("csrr %0, satp" : "=r"(x));
+    return x;
+}
+
+static inline void sfence_vma(void) {
+    asm volatile("sfence.vma zero, zero");
 }
 
 #endif
@@ -744,6 +823,7 @@ void trap_handler(struct trap_frame *tf) {
             }
             // 即使系统里只有当前进程一个 runnable,它也会被 schedule 重新选中。
             schedule();
+            vm_switch_to_user(current->user_pagetable);
             return;
         }
 
@@ -755,153 +835,150 @@ void trap_handler(struct trap_frame *tf) {
     }
 
     if (scause == 8) {   // Environment call from U-mode
-        switch (tf->a7) {
-            case SYS_PUTCHAR:
-                putchar((char)tf->a0);
-                tf->a0 = 0;
-                break;
+    int advance_sepc = 1;
+    int need_schedule = 0;
+    int old_pid = -1;
 
-            case SYS_PRINTSTR:
-                print_str((const char *)tf->a0);
-                tf->a0 = 0;
-                break;
+    switch (tf->a7) {
+        case SYS_PUTCHAR:
+            putchar((char)tf->a0);
+            tf->a0 = 0;
+            break;
 
-            case SYS_PRINTHEX:
-                print_hex(tf->a0);
-                tf->a0 = 0;
-                break;
+        case SYS_PRINTSTR:
+            print_str((const char *)tf->a0);
+            tf->a0 = 0;
+            break;
 
-            case SYS_ADD:
-                tf->a0 = tf->a0 + tf->a1;
-                break;
+        case SYS_PRINTHEX:
+            print_hex(tf->a0);
+            tf->a0 = 0;
+            break;
 
-            case SYS_GET_MAGIC:
-                tf->a0 = 'Z';
-                break;
-            case SYS_GETPID:
-                tf->a0 = current->pid;
-                break;
-            case SYS_YIELD: {
-                int old_pid = current->pid;
+        case SYS_ADD:
+            tf->a0 = tf->a0 + tf->a1;
+            break;
 
-                tf->sepc = r_sepc() + 4;
-                tf->a0 = 0;
+        case SYS_GET_MAGIC:
+            tf->a0 = 'Z';
+            break;
 
-                if (current->state == PROC_RUNNING) {
-                    current->state = PROC_RUNNABLE;
-                }
+        case SYS_GETPID:
+            tf->a0 = current->pid;
+            break;
 
-                schedule();
+        case SYS_YIELD:
+            old_pid = current->pid;
+            tf->a0 = 0;
 
-                print_str("[KERNEL] yield: pid=");
-                print_hex((unsigned long)old_pid);
-                print_str(" -> pid=");
-                print_hex((unsigned long)current->pid);
-                print_str("\n");
-
-                return;
+            if (current->state == PROC_RUNNING) {
+                current->state = PROC_RUNNABLE;
             }
 
-            case SYS_SLEEP: {
-                unsigned long n = tf->a0;
-                int old_pid = current->pid;
+            need_schedule = 1;
+            break;
 
-                tf->sepc = r_sepc() + 4;
-                tf->a0 = 0;
+        case SYS_SLEEP: {
+            unsigned long n = tf->a0;
 
-                current->wakeup_tick = ticks + n;
-                current->state = PROC_BLOCKED;
-                current->block_reason = PROC_BLOCK_SLEEP;
+            old_pid = current->pid;
+            tf->a0 = 0;
 
-                print_str("[KERNEL] sleep: pid=");
-                print_hex((unsigned long)old_pid);
-                print_str(" until tick=");
-                print_hex(current->wakeup_tick);
-                print_str("\n");
+            current->wakeup_tick = ticks + n;
+            current->state = PROC_BLOCKED;
+            current->block_reason = PROC_BLOCK_SLEEP;
 
-                schedule();
-                return;
-            }
+            print_str("[KERNEL] sleep: pid=");
+            print_hex((unsigned long)old_pid);
+            print_str(" until tick=");
+            print_hex(current->wakeup_tick);
+            print_str("\n");
 
-            case SYS_WAIT: {
-                int target_pid = (int)tf->a0;
-
-                tf->sepc = r_sepc() + 4;
-
-                if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
-                    tf->a0 = -1;
-                    break;
-                }
-
-                if (current->wait_pid != -1) {
-                    tf->a0 = -1;
-                    break;
-                }
-
-                if (procs[target_pid].waited_by != -1 &&
-                    procs[target_pid].waited_by != current->pid) {
-                    tf->a0 = -1;
-                    break;
-                }
-
-                procs[target_pid].waited_by = current->pid;
-                print_str("target waited_by=");
-                print_hex((unsigned long)procs[target_pid].waited_by);
-                print_str("\n");
-                print_str("target pid=");
-                print_hex((unsigned long)procs[target_pid].pid);
-                print_str("\n");
-
-                if (!proc_is_zombie(target_pid)) {
-                    current->wait_pid = target_pid;
-                    current->state = PROC_BLOCKED;
-                    current->block_reason = PROC_BLOCK_WAIT;
-                    schedule();
-                }
-                else
-                    proc_reap(target_pid);
-                
-                tf->a0 = 0;
-                break;
-            }
-
-            case SYS_EXIT: {
-                int old_pid = current->pid;
-
-                print_str("[KERNEL] exit: pid=");
-                print_hex((unsigned long)old_pid);
-                print_str("\n");
-
-                current->state = PROC_ZOMBIE;
-
-                print_str("waited_by=");
-                print_hex((unsigned long)current->waited_by);
-                print_str("\n");
-
-                proc_wakeup_waiters(current->pid);
-                proc_dump();
-
-                schedule();
-
-                print_str("[KERNEL] exit switch: pid=");
-                print_hex((unsigned long)old_pid);
-                print_str(" -> pid=");
-                print_hex((unsigned long)current->pid);
-                print_str("\n");
-
-                return;
-            }
-
-            default:
-                print_str("[KERNEL] unknown syscall, a7=");
-                print_hex(tf->a7);
-                print_str("\n");
-                tf->a0 = -1;
-                break;
+            need_schedule = 1;
+            break;
         }
 
+        case SYS_WAIT: {
+            int target_pid = (int)tf->a0;
+
+            if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
+                tf->a0 = -1;
+                break;
+            }
+
+            if (current->wait_pid != -1) {
+                tf->a0 = -1;
+                break;
+            }
+
+            if (procs[target_pid].waited_by != -1 &&
+                procs[target_pid].waited_by != current->pid) {
+                tf->a0 = -1;
+                break;
+            }
+
+            procs[target_pid].waited_by = current->pid;
+
+            if (proc_is_zombie(target_pid)) {
+                tf->a0 = procs[target_pid].exit_code;
+                break;
+            }
+
+            current->wait_pid = target_pid;
+            current->state = PROC_BLOCKED;
+            current->block_reason = PROC_BLOCK_WAIT;
+            need_schedule = 1;
+            break;
+        }
+
+        case SYS_EXIT:
+            old_pid = current->pid;
+
+            print_str("[KERNEL] exit: pid=");
+            print_hex((unsigned long)old_pid);
+            print_str("\n");
+
+            current->exit_code = (int)tf->a0;
+            current->state = PROC_ZOMBIE;
+            proc_wakeup_waiters(current->pid);
+
+            need_schedule = 1;
+            break;
+
+        default:
+            print_str("[KERNEL] unknown syscall, a7=");
+            print_hex(tf->a7);
+            print_str("\n");
+            tf->a0 = -1;
+            break;
+    }
+
+    if (advance_sepc) {
         tf->sepc = r_sepc() + 4;
-        return;
+    } else {
+        tf->sepc = r_sepc();
+    }
+
+    if (need_schedule) {
+        schedule();
+
+        if (tf->a7 == SYS_YIELD) {
+            print_str("[KERNEL] yield: pid=");
+            print_hex((unsigned long)old_pid);
+            print_str(" -> pid=");
+            print_hex((unsigned long)current->pid);
+            print_str("\n");
+        } else if (tf->a7 == SYS_EXIT) {
+            print_str("[KERNEL] exit switch: pid=");
+            print_hex((unsigned long)old_pid);
+            print_str(" -> pid=");
+            print_hex((unsigned long)current->pid);
+            print_str("\n");
+        }
+    }
+    
+    vm_switch_to_user(current->user_pagetable);
+    return;
     }
 
     print_str("[KERNEL] unhandled trap, scause=");
@@ -1135,8 +1212,11 @@ user_entry2:
 void user_main(void)
 {
     sys_printstr("[USER0] wait pid=1\n");
-    sys_wait(1);
-    sys_printstr("[USER0] wait returned, pid=1 reaped\n");
+    long code = sys_wait(1);
+    sys_printstr("[USER0] wait returned, exit code=");
+    sys_printhex((unsigned long)code);
+    sys_printstr("\n");
+
 
     while (1) {
         sys_yield();
@@ -1145,7 +1225,7 @@ void user_main(void)
 void user_main2(void)
 {
     sys_printstr("[USER1] exit now\n");
-    sys_exit(0);
+    sys_exit(42);
 
     while (1) { }
 }
@@ -1221,5 +1301,228 @@ long sys_wait(long pid) {
 long sys_getpid(void) {
     return do_syscall0(SYS_GETPID);
 }
+```
+
+### vm.c
+
+```c
+// vm.c
+#include "vm.h"
+#include "proc.h"
+#include "sbi.h"
+#include "riscv.h"
+#include "memlayout.h"
+
+extern void user_entry(void);
+extern void user_entry2(void);
+
+#define USER_PT_PAGE_COUNT (4 + KERNEL_L0_TABLES)
+
+static pte_t user_pts[PROC_NUM][USER_PT_PAGE_COUNT][PT_ENTRY_COUNT]
+    __attribute__((aligned(PAGE_SIZE)));
+
+static unsigned char user_stack_pages[PROC_NUM][USER_STACK_SIZE]
+    __attribute__((aligned(PAGE_SIZE)));
+
+/*
+ * Layout per process:
+ *   [0] root L2
+ *   [1] low L1 (for USER_STACK_TOP region)
+ *   [2] low L0 (stack leaf table)
+ *   [3] kernel L1
+ *   [4..] kernel L0 tables covering KERNEL_MAP_SIZE
+ */
+
+static inline unsigned long vpn2(unsigned long va) {
+    return (va >> 30) & 0x1ffUL;
+}
+
+static inline unsigned long vpn1(unsigned long va) {
+    return (va >> 21) & 0x1ffUL;
+}
+
+static inline unsigned long vpn0(unsigned long va) {
+    return (va >> 12) & 0x1ffUL;
+}
+
+static inline unsigned long page_down(unsigned long x) {
+    return x & ~(PAGE_SIZE - 1);
+}
+
+static inline unsigned long page_up(unsigned long x) {
+    return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+}
+
+static inline unsigned long pa_to_pte(unsigned long pa) {
+    return ((pa >> PAGE_SHIFT) << 10);
+}
+
+static inline unsigned long pte_to_pa(pte_t pte) {
+    return ((pte >> 10) << PAGE_SHIFT);
+}
+
+static unsigned long user_entry_pa_for_pid(int pid) {
+    if (pid == 0) {
+        return (unsigned long)user_entry;
+    }
+    return (unsigned long)user_entry2;
+}
+
+void vm_init(void) {
+    for (int p = 0; p < PROC_NUM; p++) {
+        for (int table = 0; table < USER_PT_PAGE_COUNT; table++) {
+            for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
+                user_pts[p][table][i] = 0;
+            }
+        }
+
+        for (unsigned long i = 0; i < USER_STACK_SIZE; i++) {
+            user_stack_pages[p][i] = 0;
+        }
+    }
+
+    print_str("vm scaffold init done\n");
+}
+
+void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm) {
+    pte_t *l2 = (pte_t *)pt;
+    pte_t *l1;
+    pte_t *l0;
+
+    if (!(l2[vpn2(va)] & PTE_V)) {
+        print_str("[KERNEL] vm_map_page: missing l1 table\n");
+        return;
+    }
+    l1 = (pte_t *)pte_to_pa(l2[vpn2(va)]);
+
+    if (!(l1[vpn1(va)] & PTE_V)) {
+        print_str("[KERNEL] vm_map_page: missing l0 table\n");
+        return;
+    }
+    l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
+
+    l0[vpn0(va)] = pa_to_pte(pa) | perm | PTE_V;
+}
+
+pagetable_t vm_make_user_pagetable(int pid) {
+    pte_t *l2;
+    pte_t *l1_low;
+    pte_t *l0_stack;
+    pte_t *l1_kernel;
+    pte_t *l0_kernel[KERNEL_L0_TABLES];
+    unsigned long stack_bottom;
+    unsigned long code_start;
+    unsigned long code_end;
+
+    if (pid < 0 || pid >= PROC_NUM) {
+        return 0;
+    }
+
+    l2 = user_pts[pid][0];
+    l1_low = user_pts[pid][1];
+    l0_stack = user_pts[pid][2];
+    l1_kernel = user_pts[pid][3];
+
+    for (int t = 0; t < KERNEL_L0_TABLES; t++) {
+        l0_kernel[t] = user_pts[pid][4 + t];
+    }
+
+    for (int table = 0; table < USER_PT_PAGE_COUNT; table++) {
+        for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
+            user_pts[pid][table][i] = 0;
+        }
+    }
+
+    stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
+
+    /*
+     * Low user region for stack.
+     */
+    l2[vpn2(stack_bottom)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
+    l1_low[vpn1(stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
+
+    vm_map_page((pagetable_t)l2,
+                stack_bottom,
+                (unsigned long)user_stack_pages[pid],
+                PTE_R | PTE_W | PTE_U);
+
+    /*
+     * Shared kernel mapping window.
+     * Supervisor-only by default.
+     */
+    l2[vpn2(KERNEL_MAP_BASE)] = pa_to_pte((unsigned long)l1_kernel) | PTE_V;
+
+    for (int t = 0; t < KERNEL_L0_TABLES; t++) {
+        unsigned long chunk_base = KERNEL_MAP_BASE + (unsigned long)t * KERNEL_L0_SPAN;
+
+        l1_kernel[vpn1(chunk_base)] = pa_to_pte((unsigned long)l0_kernel[t]) | PTE_V;
+
+        for (unsigned long off = 0; off < KERNEL_L0_SPAN; off += PAGE_SIZE) {
+            unsigned long va = chunk_base + off;
+            unsigned long pa = chunk_base + off;
+
+            vm_map_page((pagetable_t)l2, va, pa, PTE_R | PTE_W | PTE_X);
+        }
+    }
+
+    /*
+     * Temporarily expose a small linked user-code window as user executable.
+     * This lets existing user_entry/user_main code keep running at its current
+     * linked virtual address while we bring up VM incrementally.
+     */
+    code_start = page_down(user_entry_pa_for_pid(pid));
+    code_end = page_up(code_start + USER_CODE_WINDOW_SIZE);
+
+    for (unsigned long va = code_start; va < code_end; va += PAGE_SIZE) {
+        vm_map_page((pagetable_t)l2, va, va, PTE_R | PTE_X | PTE_U);
+    }
+
+    return (pagetable_t)l2;
+}
+
+unsigned long vm_make_satp(pagetable_t pt) {
+    return SATP_MODE_SV39 | (pt >> PAGE_SHIFT);
+}
+
+void vm_switch_to_user(pagetable_t pt) {
+    if (!pt) {
+        return;
+    }
+
+    w_satp(vm_make_satp(pt));
+    sfence_vma();
+}
+```
+
+### vm.h
+
+```plaintext
+// vm.h
+#ifndef VM_H
+#define VM_H
+
+#include "memlayout.h"
+
+#define PTE_V (1UL << 0)
+#define PTE_R (1UL << 1)
+#define PTE_W (1UL << 2)
+#define PTE_X (1UL << 3)
+#define PTE_U (1UL << 4)
+#define PTE_G (1UL << 5)
+#define PTE_A (1UL << 6)
+#define PTE_D (1UL << 7)
+
+#define SATP_MODE_SV39  (8UL << 60)
+
+typedef unsigned long pte_t;
+typedef unsigned long pagetable_t;
+
+void vm_init(void);
+void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm);
+pagetable_t vm_make_user_pagetable(int pid);
+unsigned long vm_make_satp(pagetable_t pt);
+void vm_switch_to_user(pagetable_t pt);
+
+#endif
 ```
 

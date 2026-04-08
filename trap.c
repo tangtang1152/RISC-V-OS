@@ -34,6 +34,7 @@ void trap_handler(struct trap_frame *tf) {
             }
             // 即使系统里只有当前进程一个 runnable,它也会被 schedule 重新选中。
             schedule();
+            vm_switch_to_user(current->user_pagetable);
             return;
         }
 
@@ -44,7 +45,7 @@ void trap_handler(struct trap_frame *tf) {
         while (1) {}
     }
 
-if (scause == 8) {   // Environment call from U-mode
+    if (scause == 8) {   // Environment call from U-mode
     int advance_sepc = 1;
     int need_schedule = 0;
     int old_pid = -1;
@@ -186,9 +187,10 @@ if (scause == 8) {   // Environment call from U-mode
             print_str("\n");
         }
     }
-
+    
+    vm_switch_to_user(current->user_pagetable);
     return;
-}
+    }
 
     print_str("[KERNEL] unhandled trap, scause=");
     print_hex(scause);

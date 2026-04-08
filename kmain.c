@@ -12,6 +12,7 @@ void kmain(void) {
 
     print_str("kmain enter\n");
 
+    vm_init();
     proc_init();
 
     w_stvec(kernel_entry);
@@ -20,8 +21,7 @@ void kmain(void) {
     timer_init();
     print_str("timer init done\n");
 
-    vm_init();
-
+    vm_switch_to_user(current->user_pagetable);
     w_sscratch((unsigned long)&current->scratch);
 
     sstatus = r_sstatus();

@@ -21,5 +21,6 @@ void vm_init(void);
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm);
 pagetable_t vm_make_user_pagetable(int pid);
 unsigned long vm_make_satp(pagetable_t pt);
+void vm_switch_to_user(pagetable_t pt);
 
 #endif
