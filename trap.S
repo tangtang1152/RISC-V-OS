@@ -5,17 +5,34 @@
 .globl user_entry
 .globl user_entry2
 .global user_return
+.global kernel_return
 
 .balign 4
 kernel_entry:
-    # swap: t0 <- sscratch(scratch_ptr), sscratch <- user_t0
+    # swap:
+    #   t0 <- old sscratch
+    #   sscratch <- old t0
+    #
+    # Current convention:
+    #   - for U-traps, sscratch holds &current->scratch
+    #   - for current temporary S-trap handling, schedule()->wfi also primes
+    #     sscratch with &current->scratch before idle wait
     csrrw t0, sscratch, t0
 
-    # early scratch save of user t1/t2/t0/sp
+    # save original t1/t2 early into scratch
     sd t1, 0(t0)              # scratch.user_t1
     sd t2, 8(t0)              # scratch.user_t2
 
-    csrr t1, sscratch         # t1 = user_t0
+    # distinguish trap source by SPP
+    #   SPP=0 -> trap came from U-mode
+    #   SPP=1 -> trap came from S-mode
+    csrr t1, sstatus
+    andi t1, t1, 0x100
+    bnez t1, kernel_trap_entry
+
+user_trap_entry:
+    # original user t0 is now in sscratch
+    csrr t1, sscratch
     sd t1, 16(t0)             # scratch.user_t0
 
     sd sp, 24(t0)             # scratch.user_sp
@@ -29,19 +46,19 @@ kernel_entry:
     sd ra, 0(t1)
 
     ld t2, 24(t0)
-    sd t2, 8(t1)              # tf->sp = user sp
+    sd t2, 8(t1)              # tf->sp = saved user sp
 
     sd gp, 16(t1)
     sd tp, 24(t1)
 
     ld t2, 16(t0)
-    sd t2, 32(t1)             # tf->t0 = saved user_t0
+    sd t2, 32(t1)             # tf->t0 = saved user t0
 
     ld t2, 0(t0)
-    sd t2, 40(t1)             # tf->t1 = saved user_t1
+    sd t2, 40(t1)             # tf->t1 = saved user t1
 
     ld t2, 8(t0)
-    sd t2, 48(t1)             # tf->t2 = saved user_t2
+    sd t2, 48(t1)             # tf->t2 = saved user t2
 
     sd s0, 56(t1)
     sd s1, 64(t1)
@@ -76,6 +93,66 @@ kernel_entry:
     mv a0, t1
     call trap_handler
     j user_return
+
+.balign 4
+kernel_trap_entry:
+    # We arrived here from S-mode.
+    # Use a temporary trap_frame on the current kernel stack.
+    addi sp, sp, -256
+
+    sd ra, 0(sp)
+
+    # interrupted kernel sp = current sp + 256
+    addi t1, sp, 256
+    sd t1, 8(sp)
+
+    sd gp, 16(sp)
+    sd tp, 24(sp)
+
+    # original kernel t0 was swapped into sscratch at entry
+    csrr t1, sscratch
+    sd t1, 32(sp)
+
+    # original kernel t1/t2 were saved into scratch at entry
+    ld t1, 0(t0)
+    sd t1, 40(sp)
+
+    ld t1, 8(t0)
+    sd t1, 48(sp)
+
+    sd s0, 56(sp)
+    sd s1, 64(sp)
+    sd s2, 72(sp)
+    sd s3, 80(sp)
+    sd s4, 88(sp)
+    sd s5, 96(sp)
+    sd s6, 104(sp)
+    sd s7, 112(sp)
+    sd s8, 120(sp)
+    sd s9, 128(sp)
+    sd s10, 136(sp)
+    sd s11, 144(sp)
+
+    sd a0, 152(sp)
+    sd a1, 160(sp)
+    sd a2, 168(sp)
+    sd a3, 176(sp)
+    sd a4, 184(sp)
+    sd a5, 192(sp)
+    sd a6, 200(sp)
+    sd a7, 208(sp)
+
+    sd t3, 216(sp)
+    sd t4, 224(sp)
+    sd t5, 232(sp)
+    sd t6, 240(sp)
+
+    csrr t1, sepc
+    sd t1, 248(sp)
+
+    mv a0, sp
+    call trap_handler
+    j kernel_return
 
 .balign 4
 user_return:
@@ -131,6 +208,57 @@ user_return:
     ld t2, 48(t1)
     ld t1, 40(t1)
 
+    sret
+
+.balign 4
+kernel_return:
+    # restore interrupted kernel context from temporary trap_frame on current sp
+
+    ld t1, 248(sp)
+    csrw sepc, t1
+
+    # restore sscratch to &current->scratch for future U-traps / idle traps
+    la t3, current
+    ld t3, 0(t3)              # current, and scratch is first field
+    csrw sscratch, t3
+
+    ld ra, 0(sp)
+    ld gp, 16(sp)
+    ld tp, 24(sp)
+
+    ld s0, 56(sp)
+    ld s1, 64(sp)
+    ld s2, 72(sp)
+    ld s3, 80(sp)
+    ld s4, 88(sp)
+    ld s5, 96(sp)
+    ld s6, 104(sp)
+    ld s7, 112(sp)
+    ld s8, 120(sp)
+    ld s9, 128(sp)
+    ld s10, 136(sp)
+    ld s11, 144(sp)
+
+    ld a0, 152(sp)
+    ld a1, 160(sp)
+    ld a2, 168(sp)
+    ld a3, 176(sp)
+    ld a4, 184(sp)
+    ld a5, 192(sp)
+    ld a6, 200(sp)
+    ld a7, 208(sp)
+
+    ld t3, 216(sp)
+    ld t4, 224(sp)
+    ld t5, 232(sp)
+    ld t6, 240(sp)
+
+    # restore t0/t1/t2 last
+    ld t2, 48(sp)
+    ld t1, 40(sp)
+    ld t0, 32(sp)
+
+    addi sp, sp, 256
     sret
 
 .section .usertext

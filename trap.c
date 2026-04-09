@@ -22,8 +22,23 @@ void trap_handler(struct trap_frame *tf) {
         unsigned long code = SCAUSE_CODE(scause);
 
         if (code == 5) {   // supervisor timer interrupt
+            unsigned long sstatus = r_sstatus();
+
             timer_tick();
             proc_wakeup_sleepers(ticks);
+
+            if (sstatus & (1UL << 8)) {
+                return;
+            }
+
+            tf->sepc = r_sepc();
+
+            if (current->state == PROC_RUNNING) {
+                current->state = PROC_RUNNABLE;
+            }
+
+            schedule();
+            vm_switch_to_user(current->user_pagetable);
             return;
         }
 
