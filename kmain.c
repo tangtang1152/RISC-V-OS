@@ -17,11 +17,11 @@ void kmain(void) {
 
     w_stvec(kernel_entry);
     print_str("stvec set\n");
-    
+    w_sscratch((unsigned long)&current->scratch);
+
     timer_init();
     print_str("timer init done\n");
 
-    w_sscratch((unsigned long)&current->scratch);
     vm_switch_to_user(current->user_pagetable);
 
     sstatus = r_sstatus();
