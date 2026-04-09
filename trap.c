@@ -22,32 +22,8 @@ void trap_handler(struct trap_frame *tf) {
         unsigned long code = SCAUSE_CODE(scause);
 
         if (code == 5) {   // supervisor timer interrupt
-            unsigned long sstatus = r_sstatus();
-
             timer_tick();
             proc_wakeup_sleepers(ticks);
-
-            /*
-            * SPP=1 means the interrupt came from S-mode (kernel),
-            * for example schedule()->wfi idle path.
-            * In that case, just return to the interrupted kernel path.
-            */
-            if (sstatus & (1UL << 8)) {
-                return;
-            }
-
-            /*
-            * SPP=0 means the interrupt came from U-mode.
-            * Treat it as a normal user preemption point.
-            */
-            tf->sepc = r_sepc();
-
-            if (current->state == PROC_RUNNING) {
-                current->state = PROC_RUNNABLE;
-            }
-
-            schedule();
-            vm_switch_to_user(current->user_pagetable);
             return;
         }
 
