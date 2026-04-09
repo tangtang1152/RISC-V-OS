@@ -53,8 +53,8 @@ static inline unsigned long pte_to_pa(pte_t pte) {
 }
 
 void vm_init(void) {
-    for (int p = 0; p < PROC_NUM; p++) {
-        for (int table = 0; table < USER_PT_PAGE_COUNT; table++) {
+    for (unsigned long p = 0; p < PROC_NUM; p++) {
+        for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
             for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
                 user_pts[p][table][i] = 0;
             }
@@ -112,11 +112,11 @@ pagetable_t vm_make_user_pagetable(int pid) {
     l0_stack = user_pts[pid][2];
     l1_kernel = user_pts[pid][3];
 
-    for (int t = 0; t < KERNEL_L0_TABLES; t++) {
+    for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
         l0_kernel[t] = user_pts[pid][4 + t];
     }
 
-    for (int table = 0; table < USER_PT_PAGE_COUNT; table++) {
+    for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
         for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
             user_pts[pid][table][i] = 0;
         }
@@ -141,7 +141,7 @@ pagetable_t vm_make_user_pagetable(int pid) {
      */
     l2[vpn2(KERNEL_MAP_BASE)] = pa_to_pte((unsigned long)l1_kernel) | PTE_V;
 
-    for (int t = 0; t < KERNEL_L0_TABLES; t++) {
+    for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
         unsigned long chunk_base = KERNEL_MAP_BASE + (unsigned long)t * KERNEL_L0_SPAN;
 
         l1_kernel[vpn1(chunk_base)] = pa_to_pte((unsigned long)l0_kernel[t]) | PTE_V;
