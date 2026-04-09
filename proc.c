@@ -106,13 +106,18 @@ void schedule(void) {
             idle_printed = 1;
         }
 
+        // 关键：idle 等中断前开 SIE，否则可能永远等不到 timer
+        unsigned long s = r_sstatus();
+        w_sstatus(s | (1UL << 1));   // SIE=1
         asm volatile("wfi");
+        w_sstatus(s);                // 恢复原值
     }
 }
 
 void proc_wakeup_sleepers(unsigned long now) {
     for (int i = 0; i < PROC_NUM; i++) {
         if (procs[i].state == PROC_BLOCKED &&
+            procs[i].block_reason == PROC_BLOCK_SLEEP &&
             procs[i].wakeup_tick <= now) {
             procs[i].block_reason = PROC_BLOCK_NONE;
             procs[i].state = PROC_RUNNABLE;
@@ -151,6 +156,7 @@ void proc_wakeup_waiters(int exited_pid) {
     print_str("\n");
 
     if (procs[waiter_pid].state == PROC_BLOCKED &&
+        procs[waiter_pid].block_reason == PROC_BLOCK_WAIT &&
         procs[waiter_pid].wait_pid == exited_pid) {
         procs[waiter_pid].wait_pid = -1;
         procs[waiter_pid].tf.a0 = procs[exited_pid].exit_code;

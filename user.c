@@ -3,19 +3,49 @@
 
 USER_TEXT void user_main(void)
 {
+    long pid = sys_getpid();
+    long magic = sys_get_magic();
+    long sum = sys_add(20, 22);
+
+    sys_printstr("[USER0] pid=");
+    sys_printhex((unsigned long)pid);
+    sys_printstr(" magic=");
+    sys_printhex((unsigned long)magic);
+    sys_printstr(" add(20,22)=");
+    sys_printhex((unsigned long)sum);
+    sys_printstr("\n");
+
     sys_printstr("[USER0] wait pid=1\n");
     long code = sys_wait(1);
     sys_printstr("[USER0] wait returned, exit code=");
     sys_printhex((unsigned long)code);
     sys_printstr("\n");
 
-    while (1) {
-        sys_yield();
+    if (code == 42 && sum == 42 && magic == 'Z') {
+        sys_printstr("[USER0] TEST PASS\n");
+    } else {
+        sys_printstr("[USER0] TEST FAIL\n");
     }
+
+    sys_exit(0);
+    while (1) { }
 }
 
 USER_TEXT void user_main2(void)
 {
+    long pid = sys_getpid();
+    long sum = sys_add(10, 32);
+
+    sys_printstr("[USER1] pid=");
+    sys_printhex((unsigned long)pid);
+    sys_printstr(" add(10,32)=");
+    sys_printhex((unsigned long)sum);
+    sys_printstr("\n");
+
+    sys_printstr("[USER1] sleep 3 ticks\n");
+    sys_sleep(3);
+    sys_yield();
+
     sys_printstr("[USER1] exit now\n");
     sys_exit(42);
 
