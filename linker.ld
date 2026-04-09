@@ -23,6 +23,7 @@ SECTIONS
         *(.usertext)
         *(.usertext.*)
     }
+    . = ALIGN(4096);
     __usertext_end = .;
     
     .rodata : {
