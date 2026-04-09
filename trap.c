@@ -47,6 +47,8 @@ void trap_handler(struct trap_frame *tf) {
 
     if (scause == 8) {   // Environment call from U-mode
     int advance_sepc = 1;
+
+    
     int need_schedule = 0;
     int old_pid = -1;
 

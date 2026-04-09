@@ -109,6 +109,8 @@ void schedule(void) {
         // 关键：idle 等中断前开 SIE，否则可能永远等不到 timer
         unsigned long s = r_sstatus();
         w_sstatus(s | (1UL << 1));   // SIE=1
+        // S-mode中断临时用U-mode的中断处理来跑 
+        w_sscratch((unsigned long)&current->scratch);
         asm volatile("wfi");
         w_sstatus(s);                // 恢复原值
     }
