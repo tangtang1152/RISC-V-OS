@@ -1,6 +1,6 @@
 # Project Files Export
 
-Export time: 4/8/2026, 5:12:24 PM
+Export time: 4/10/2026, 2:39:02 AM
 
 Source directory: `riscv`
 
@@ -36,17 +36,17 @@ riscv
 ## File Statistics
 
 - Total files: 20
-- Total size: 32.1 KB
+- Total size: 36.5 KB
 
 ### File Type Distribution
 
 | Extension | Files | Total Size |
 | --- | --- | --- |
 | .h | 8 | 6.7 KB |
-| .c | 7 | 20.6 KB |
-| (no extension) | 2 | 780 bytes |
-| .s | 2 | 3.4 KB |
-| .ld | 1 | 657 bytes |
+| .c | 7 | 22.2 KB |
+| (no extension) | 2 | 803 bytes |
+| .s | 2 | 6.0 KB |
+| .ld | 1 | 831 bytes |
 
 ## File Contents
 
@@ -57,6 +57,8 @@ riscv
 kernel.elf
 kernel.bin
 kernel.dump
+kernel.nm
+qemu-int.log
 project-files.md
 ```
 
@@ -83,12 +85,12 @@ void kmain(void) {
 
     w_stvec(kernel_entry);
     print_str("stvec set\n");
-    
+    w_sscratch((unsigned long)&current->scratch);
+
     timer_init();
     print_str("timer init done\n");
 
     vm_switch_to_user(current->user_pagetable);
-    w_sscratch((unsigned long)&current->scratch);
 
     sstatus = r_sstatus();
     sstatus &= ~(1UL << 8);   // clear SPP -> sret returns to U-mode
@@ -125,6 +127,15 @@ SECTIONS
         *(.text .text.*)
     }
 
+    . = ALIGN(4096);
+    __usertext_start = .;
+    .usertext : {
+        *(.usertext)
+        *(.usertext.*)
+    }
+    . = ALIGN(4096);
+    __usertext_end = .;
+    
     .rodata : {
         *(.rodata .rodata.*)
     }
@@ -318,13 +329,20 @@ void schedule(void) {
             idle_printed = 1;
         }
 
+        // 关键：idle 等中断前开 SIE，否则可能永远等不到 timer
+        unsigned long s = r_sstatus();
+        w_sstatus(s | (1UL << 1));   // SIE=1
+        // S-mode中断还是依赖U-mode的scratch来保存当前进程的上下文 
+        w_sscratch((unsigned long)&current->scratch);
         asm volatile("wfi");
+        w_sstatus(s);                // 恢复原值
     }
 }
 
 void proc_wakeup_sleepers(unsigned long now) {
     for (int i = 0; i < PROC_NUM; i++) {
         if (procs[i].state == PROC_BLOCKED &&
+            procs[i].block_reason == PROC_BLOCK_SLEEP &&
             procs[i].wakeup_tick <= now) {
             procs[i].block_reason = PROC_BLOCK_NONE;
             procs[i].state = PROC_RUNNABLE;
@@ -363,6 +381,7 @@ void proc_wakeup_waiters(int exited_pid) {
     print_str("\n");
 
     if (procs[waiter_pid].state == PROC_BLOCKED &&
+        procs[waiter_pid].block_reason == PROC_BLOCK_WAIT &&
         procs[waiter_pid].wait_pid == exited_pid) {
         procs[waiter_pid].wait_pid = -1;
         procs[waiter_pid].tf.a0 = procs[exited_pid].exit_code;
@@ -811,23 +830,27 @@ void trap_handler(struct trap_frame *tf) {
         unsigned long code = SCAUSE_CODE(scause);
 
         if (code == 5) {   // supervisor timer interrupt
-            timer_tick();
+            unsigned long sstatus = r_sstatus();
 
+            timer_tick();
             proc_wakeup_sleepers(ticks);
 
-            //和yield一样先存pc 但这次不需要加4 ecall+4是因为要跳过ecall
-            tf->sepc = r_sepc(); 
-            
+            if (sstatus & (1UL << 8)) {
+                return;
+            }
+
+            tf->sepc = r_sepc();
+
             if (current->state == PROC_RUNNING) {
                 current->state = PROC_RUNNABLE;
             }
-            // 即使系统里只有当前进程一个 runnable,它也会被 schedule 重新选中。
+
             schedule();
             vm_switch_to_user(current->user_pagetable);
             return;
         }
 
-        print_str("[KERNEL] unhandled interrupt, scause=");
+        print_str("[KERNEL] unhandled time interrupt, scause=");
         print_hex(scause);
         print_str("\n");
         proc_dump();
@@ -835,150 +858,150 @@ void trap_handler(struct trap_frame *tf) {
     }
 
     if (scause == 8) {   // Environment call from U-mode
-    int advance_sepc = 1;
-    int need_schedule = 0;
-    int old_pid = -1;
+        int advance_sepc = 1;
+        int need_schedule = 0;
+        int old_pid = -1;
 
-    switch (tf->a7) {
-        case SYS_PUTCHAR:
-            putchar((char)tf->a0);
-            tf->a0 = 0;
-            break;
+        switch (tf->a7) {
+            case SYS_PUTCHAR:
+                putchar((char)tf->a0);
+                tf->a0 = 0;
+                break;
+            
+            case SYS_PRINTSTR:
+                print_str((const char *)tf->a0);
+                tf->a0 = 0;
+                break;
 
-        case SYS_PRINTSTR:
-            print_str((const char *)tf->a0);
-            tf->a0 = 0;
-            break;
+            case SYS_PRINTHEX:
+                print_hex(tf->a0);
+                tf->a0 = 0;
+                break;
 
-        case SYS_PRINTHEX:
-            print_hex(tf->a0);
-            tf->a0 = 0;
-            break;
+            case SYS_ADD:
+                tf->a0 = tf->a0 + tf->a1;
+                break;
 
-        case SYS_ADD:
-            tf->a0 = tf->a0 + tf->a1;
-            break;
+            case SYS_GET_MAGIC:
+                tf->a0 = 'Z';
+                break;
 
-        case SYS_GET_MAGIC:
-            tf->a0 = 'Z';
-            break;
+            case SYS_GETPID:
+                tf->a0 = current->pid;
+                break;
 
-        case SYS_GETPID:
-            tf->a0 = current->pid;
-            break;
+            case SYS_YIELD:
+                old_pid = current->pid;
+                tf->a0 = 0;
 
-        case SYS_YIELD:
-            old_pid = current->pid;
-            tf->a0 = 0;
+                if (current->state == PROC_RUNNING) 
+                    current->state = PROC_RUNNABLE;
 
-            if (current->state == PROC_RUNNING) {
-                current->state = PROC_RUNNABLE;
+                need_schedule = 1;
+                break;
+
+            case SYS_SLEEP: {
+                unsigned long n = tf->a0;
+
+                old_pid = current->pid;
+                tf->a0 = 0;
+
+                current->wakeup_tick = ticks + n;
+                current->state = PROC_BLOCKED;
+                current->block_reason = PROC_BLOCK_SLEEP;
+
+                print_str("[KERNEL] sleep: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" until tick=");
+                print_hex(current->wakeup_tick);
+                print_str("\n");
+
+                need_schedule = 1;
+                break;
             }
 
-            need_schedule = 1;
-            break;
+            case SYS_WAIT: {
+                int target_pid = (int)tf->a0;
 
-        case SYS_SLEEP: {
-            unsigned long n = tf->a0;
+                if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
+                    tf->a0 = -1;
+                    break;
+                }
 
-            old_pid = current->pid;
-            tf->a0 = 0;
+                if (current->wait_pid != -1) {
+                    tf->a0 = -1;
+                    break;
+                }
 
-            current->wakeup_tick = ticks + n;
-            current->state = PROC_BLOCKED;
-            current->block_reason = PROC_BLOCK_SLEEP;
+                if (procs[target_pid].waited_by != -1 &&
+                    procs[target_pid].waited_by != current->pid) {
+                    tf->a0 = -1;
+                    break;
+                }
 
-            print_str("[KERNEL] sleep: pid=");
-            print_hex((unsigned long)old_pid);
-            print_str(" until tick=");
-            print_hex(current->wakeup_tick);
-            print_str("\n");
+                procs[target_pid].waited_by = current->pid;
 
-            need_schedule = 1;
-            break;
-        }
+                if (proc_is_zombie(target_pid)) {
+                    tf->a0 = procs[target_pid].exit_code;
+                    break;
+                }
 
-        case SYS_WAIT: {
-            int target_pid = (int)tf->a0;
+                current->wait_pid = target_pid;
+                current->state = PROC_BLOCKED;
+                current->block_reason = PROC_BLOCK_WAIT;
+                need_schedule = 1;
+                break;
+            }
 
-            if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
+            case SYS_EXIT:{
+                old_pid = current->pid;
+
+                print_str("[KERNEL] exit: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str("\n");
+
+                current->exit_code = (int)tf->a0;
+                current->state = PROC_ZOMBIE;
+                proc_wakeup_waiters(current->pid);
+
+                need_schedule = 1;
+                break;
+            }
+
+            default:
+                print_str("[KERNEL] unknown syscall, a7=");
+                print_hex(tf->a7);
+                print_str("\n");
                 tf->a0 = -1;
                 break;
-            }
-
-            if (current->wait_pid != -1) {
-                tf->a0 = -1;
-                break;
-            }
-
-            if (procs[target_pid].waited_by != -1 &&
-                procs[target_pid].waited_by != current->pid) {
-                tf->a0 = -1;
-                break;
-            }
-
-            procs[target_pid].waited_by = current->pid;
-
-            if (proc_is_zombie(target_pid)) {
-                tf->a0 = procs[target_pid].exit_code;
-                break;
-            }
-
-            current->wait_pid = target_pid;
-            current->state = PROC_BLOCKED;
-            current->block_reason = PROC_BLOCK_WAIT;
-            need_schedule = 1;
-            break;
+            
         }
 
-        case SYS_EXIT:
-            old_pid = current->pid;
+        if (advance_sepc) 
+            tf->sepc = r_sepc() + 4;
+        else
+            tf->sepc = r_sepc();
 
-            print_str("[KERNEL] exit: pid=");
-            print_hex((unsigned long)old_pid);
-            print_str("\n");
+        if (need_schedule) {
+            schedule();
 
-            current->exit_code = (int)tf->a0;
-            current->state = PROC_ZOMBIE;
-            proc_wakeup_waiters(current->pid);
-
-            need_schedule = 1;
-            break;
-
-        default:
-            print_str("[KERNEL] unknown syscall, a7=");
-            print_hex(tf->a7);
-            print_str("\n");
-            tf->a0 = -1;
-            break;
-    }
-
-    if (advance_sepc) {
-        tf->sepc = r_sepc() + 4;
-    } else {
-        tf->sepc = r_sepc();
-    }
-
-    if (need_schedule) {
-        schedule();
-
-        if (tf->a7 == SYS_YIELD) {
-            print_str("[KERNEL] yield: pid=");
-            print_hex((unsigned long)old_pid);
-            print_str(" -> pid=");
-            print_hex((unsigned long)current->pid);
-            print_str("\n");
-        } else if (tf->a7 == SYS_EXIT) {
-            print_str("[KERNEL] exit switch: pid=");
-            print_hex((unsigned long)old_pid);
-            print_str(" -> pid=");
-            print_hex((unsigned long)current->pid);
-            print_str("\n");
+            if (tf->a7 == SYS_YIELD) {
+                print_str("[KERNEL] yield: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" -> pid=");
+                print_hex((unsigned long)current->pid);
+                print_str("\n");
+            } else if (tf->a7 == SYS_EXIT) {
+                print_str("[KERNEL] exit switch: pid=");
+                print_hex((unsigned long)old_pid);
+                print_str(" -> pid=");
+                print_hex((unsigned long)current->pid);
+                print_str("\n");
+            }
         }
-    }
-    
-    vm_switch_to_user(current->user_pagetable);
-    return;
+        
+        vm_switch_to_user(current->user_pagetable);
+        return;
     }
 
     print_str("[KERNEL] unhandled trap, scause=");
@@ -1062,17 +1085,34 @@ struct trap_frame {
 .globl user_entry
 .globl user_entry2
 .global user_return
+.global kernel_return
 
 .balign 4
 kernel_entry:
-    # swap: t0 <- sscratch(scratch_ptr), sscratch <- user_t0
+    # swap:
+    #   t0 <- old sscratch
+    #   sscratch <- old t0
+    #
+    # Current convention:
+    #   - for U-traps, sscratch holds &current->scratch
+    #   - for current temporary S-trap handling, schedule()->wfi also primes
+    #     sscratch with &current->scratch before idle wait
     csrrw t0, sscratch, t0
 
-    # early scratch save of user t1/t2/t0/sp
+    # save original t1/t2 early into scratch
     sd t1, 0(t0)              # scratch.user_t1
     sd t2, 8(t0)              # scratch.user_t2
 
-    csrr t1, sscratch         # t1 = user_t0
+    # distinguish trap source by SPP
+    #   SPP=0 -> trap came from U-mode
+    #   SPP=1 -> trap came from S-mode
+    csrr t1, sstatus
+    andi t1, t1, 0x100
+    bnez t1, kernel_trap_entry
+
+user_trap_entry:
+    # original user t0 is now in sscratch
+    csrr t1, sscratch
     sd t1, 16(t0)             # scratch.user_t0
 
     sd sp, 24(t0)             # scratch.user_sp
@@ -1086,19 +1126,19 @@ kernel_entry:
     sd ra, 0(t1)
 
     ld t2, 24(t0)
-    sd t2, 8(t1)              # tf->sp = user sp
+    sd t2, 8(t1)              # tf->sp = saved user sp
 
     sd gp, 16(t1)
     sd tp, 24(t1)
 
     ld t2, 16(t0)
-    sd t2, 32(t1)             # tf->t0 = saved user_t0
+    sd t2, 32(t1)             # tf->t0 = saved user t0
 
     ld t2, 0(t0)
-    sd t2, 40(t1)             # tf->t1 = saved user_t1
+    sd t2, 40(t1)             # tf->t1 = saved user t1
 
     ld t2, 8(t0)
-    sd t2, 48(t1)             # tf->t2 = saved user_t2
+    sd t2, 48(t1)             # tf->t2 = saved user t2
 
     sd s0, 56(t1)
     sd s1, 64(t1)
@@ -1133,6 +1173,66 @@ kernel_entry:
     mv a0, t1
     call trap_handler
     j user_return
+
+.balign 4
+kernel_trap_entry:
+    # We arrived here from S-mode.
+    # Use a temporary trap_frame on the current kernel stack.
+    addi sp, sp, -256
+
+    sd ra, 0(sp)
+
+    # interrupted kernel sp = current sp + 256
+    addi t1, sp, 256
+    sd t1, 8(sp)
+
+    sd gp, 16(sp)
+    sd tp, 24(sp)
+
+    # original kernel t0 was swapped into sscratch at entry
+    csrr t1, sscratch
+    sd t1, 32(sp)
+
+    # original kernel t1/t2 were saved into scratch at entry
+    ld t1, 0(t0)
+    sd t1, 40(sp)
+
+    ld t1, 8(t0)
+    sd t1, 48(sp)
+
+    sd s0, 56(sp)
+    sd s1, 64(sp)
+    sd s2, 72(sp)
+    sd s3, 80(sp)
+    sd s4, 88(sp)
+    sd s5, 96(sp)
+    sd s6, 104(sp)
+    sd s7, 112(sp)
+    sd s8, 120(sp)
+    sd s9, 128(sp)
+    sd s10, 136(sp)
+    sd s11, 144(sp)
+
+    sd a0, 152(sp)
+    sd a1, 160(sp)
+    sd a2, 168(sp)
+    sd a3, 176(sp)
+    sd a4, 184(sp)
+    sd a5, 192(sp)
+    sd a6, 200(sp)
+    sd a7, 208(sp)
+
+    sd t3, 216(sp)
+    sd t4, 224(sp)
+    sd t5, 232(sp)
+    sd t6, 240(sp)
+
+    csrr t1, sepc
+    sd t1, 248(sp)
+
+    mv a0, sp
+    call trap_handler
+    j kernel_return
 
 .balign 4
 user_return:
@@ -1191,12 +1291,67 @@ user_return:
     sret
 
 .balign 4
+kernel_return:
+    # restore interrupted kernel context from temporary trap_frame on current sp
+
+    ld t1, 248(sp)
+    csrw sepc, t1
+
+    # restore sscratch to &current->scratch for future U-traps / idle traps
+    la t3, current
+    ld t3, 0(t3)              # current, and scratch is first field
+    csrw sscratch, t3
+
+    ld ra, 0(sp)
+    ld gp, 16(sp)
+    ld tp, 24(sp)
+
+    ld s0, 56(sp)
+    ld s1, 64(sp)
+    ld s2, 72(sp)
+    ld s3, 80(sp)
+    ld s4, 88(sp)
+    ld s5, 96(sp)
+    ld s6, 104(sp)
+    ld s7, 112(sp)
+    ld s8, 120(sp)
+    ld s9, 128(sp)
+    ld s10, 136(sp)
+    ld s11, 144(sp)
+
+    ld a0, 152(sp)
+    ld a1, 160(sp)
+    ld a2, 168(sp)
+    ld a3, 176(sp)
+    ld a4, 184(sp)
+    ld a5, 192(sp)
+    ld a6, 200(sp)
+    ld a7, 208(sp)
+
+    ld t3, 216(sp)
+    ld t4, 224(sp)
+    ld t5, 232(sp)
+    ld t6, 240(sp)
+
+    # restore t0/t1/t2 last
+    ld t2, 48(sp)
+    ld t1, 40(sp)
+    ld t0, 32(sp)
+
+    addi sp, sp, 256
+    sret
+
+.section .usertext
+.balign 4096
+.globl user_entry
+.globl user_entry2
+
 user_entry:
     call user_main
 1:
     j 1b
 
-.balign 4
+.balign 4096
 user_entry2:
     call user_main2
 2:
@@ -1207,30 +1362,61 @@ user_entry2:
 
 ```c
 // user.c
+#define USER_TEXT __attribute__((section(".usertext")))
 #include "syscall.h"
 
-void user_main(void)
+USER_TEXT void user_main(void)
 {
+    long pid = sys_getpid();
+    long magic = sys_get_magic();
+    long sum = sys_add(20, 22);
+
+    sys_printstr("[USER0] pid=");
+    sys_printhex((unsigned long)pid);
+    sys_printstr(" magic=");
+    sys_printhex((unsigned long)magic);
+    sys_printstr(" add(20,22)=");
+    sys_printhex((unsigned long)sum);
+    sys_printstr("\n");
+
     sys_printstr("[USER0] wait pid=1\n");
     long code = sys_wait(1);
     sys_printstr("[USER0] wait returned, exit code=");
     sys_printhex((unsigned long)code);
     sys_printstr("\n");
 
-
-    while (1) {
-        sys_yield();
+    if (code == 42 && sum == 42 && magic == 'Z') {
+        sys_printstr("[USER0] TEST PASS\n");
+    } else {
+        sys_printstr("[USER0] TEST FAIL\n");
     }
+
+    sys_exit(0);
+    while (1) { }
 }
-void user_main2(void)
+
+USER_TEXT void user_main2(void)
 {
+    long pid = sys_getpid();
+    long sum = sys_add(10, 32);
+
+    sys_printstr("[USER1] pid=");
+    sys_printhex((unsigned long)pid);
+    sys_printstr(" add(10,32)=");
+    sys_printhex((unsigned long)sum);
+    sys_printstr("\n");
+
+    sys_printstr("[USER1] sleep 3 ticks\n");
+    sys_sleep(3);
+    sys_yield();
+
     sys_printstr("[USER1] exit now\n");
     sys_exit(42);
 
     while (1) { }
 }
 
-static inline long do_syscall0(long n) {
+USER_TEXT static inline long do_syscall0(long n) {
     register long a0 asm("a0");
     register long a7 asm("a7") = n;
 
@@ -1243,7 +1429,8 @@ static inline long do_syscall0(long n) {
 
     return a0;
 }
-static inline long do_syscall1(long n, long x) {
+
+USER_TEXT static inline long do_syscall1(long n, long x) {
     register long a0 asm("a0") = x;
     register long a7 asm("a7") = n;
 
@@ -1256,7 +1443,8 @@ static inline long do_syscall1(long n, long x) {
 
     return a0;
 }
-static inline long do_syscall2(long n, long x, long y) {
+
+USER_TEXT static inline long do_syscall2(long n, long x, long y) {
     register long a0 asm("a0") = x;
     register long a1 asm("a1") = y;
     register long a7 asm("a7") = n;
@@ -1271,36 +1459,46 @@ static inline long do_syscall2(long n, long x, long y) {
     return a0;
 }
 
-long sys_putchar(char ch) {
+USER_TEXT long sys_putchar(char ch) {
     return do_syscall1(SYS_PUTCHAR, ch);
 }
-long sys_printstr(const char *s) {
+
+USER_TEXT long sys_printstr(const char *s) {
     return do_syscall1(SYS_PRINTSTR, (long)s);
 }
-long sys_get_magic(void) {
+
+USER_TEXT long sys_get_magic(void) {
     return do_syscall0(SYS_GET_MAGIC);
 }
-long sys_add(long x, long y) {
+
+USER_TEXT long sys_add(long x, long y) {
     return do_syscall2(SYS_ADD, x, y);
-}                   
-long sys_exit(long code) {
+}
+
+USER_TEXT long sys_exit(long code) {
     return do_syscall1(SYS_EXIT, code);
 }
-long sys_printhex(unsigned long x) {
+
+USER_TEXT long sys_printhex(unsigned long x) {
     return do_syscall1(SYS_PRINTHEX, x);
 }
-long sys_yield(void) {
+
+USER_TEXT long sys_yield(void) {
     return do_syscall0(SYS_YIELD);
 }
-long sys_sleep(long tick_count) {
+
+USER_TEXT long sys_sleep(long tick_count) {
     return do_syscall1(SYS_SLEEP, tick_count);
 }
-long sys_wait(long pid) {
+
+USER_TEXT long sys_wait(long pid) {
     return do_syscall1(SYS_WAIT, pid);
 }
-long sys_getpid(void) {
+
+USER_TEXT long sys_getpid(void) {
     return do_syscall0(SYS_GETPID);
 }
+
 ```
 
 ### vm.c
@@ -1313,8 +1511,8 @@ long sys_getpid(void) {
 #include "riscv.h"
 #include "memlayout.h"
 
-extern void user_entry(void);
-extern void user_entry2(void);
+extern char __usertext_start[];
+extern char __usertext_end[];
 
 #define USER_PT_PAGE_COUNT (4 + KERNEL_L0_TABLES)
 
@@ -1361,16 +1559,9 @@ static inline unsigned long pte_to_pa(pte_t pte) {
     return ((pte >> 10) << PAGE_SHIFT);
 }
 
-static unsigned long user_entry_pa_for_pid(int pid) {
-    if (pid == 0) {
-        return (unsigned long)user_entry;
-    }
-    return (unsigned long)user_entry2;
-}
-
 void vm_init(void) {
-    for (int p = 0; p < PROC_NUM; p++) {
-        for (int table = 0; table < USER_PT_PAGE_COUNT; table++) {
+    for (unsigned long p = 0; p < PROC_NUM; p++) {
+        for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
             for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
                 user_pts[p][table][i] = 0;
             }
@@ -1388,6 +1579,11 @@ void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned lo
     pte_t *l2 = (pte_t *)pt;
     pte_t *l1;
     pte_t *l0;
+    unsigned long leaf_perm = perm | PTE_A;
+
+    if (perm & PTE_W) {
+        leaf_perm |= PTE_D;
+    }
 
     if (!(l2[vpn2(va)] & PTE_V)) {
         print_str("[KERNEL] vm_map_page: missing l1 table\n");
@@ -1401,7 +1597,7 @@ void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned lo
     }
     l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
 
-    l0[vpn0(va)] = pa_to_pte(pa) | perm | PTE_V;
+    l0[vpn0(va)] = pa_to_pte(pa) | leaf_perm | PTE_V;
 }
 
 pagetable_t vm_make_user_pagetable(int pid) {
@@ -1423,11 +1619,11 @@ pagetable_t vm_make_user_pagetable(int pid) {
     l0_stack = user_pts[pid][2];
     l1_kernel = user_pts[pid][3];
 
-    for (int t = 0; t < KERNEL_L0_TABLES; t++) {
+    for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
         l0_kernel[t] = user_pts[pid][4 + t];
     }
 
-    for (int table = 0; table < USER_PT_PAGE_COUNT; table++) {
+    for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
         for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
             user_pts[pid][table][i] = 0;
         }
@@ -1452,7 +1648,7 @@ pagetable_t vm_make_user_pagetable(int pid) {
      */
     l2[vpn2(KERNEL_MAP_BASE)] = pa_to_pte((unsigned long)l1_kernel) | PTE_V;
 
-    for (int t = 0; t < KERNEL_L0_TABLES; t++) {
+    for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
         unsigned long chunk_base = KERNEL_MAP_BASE + (unsigned long)t * KERNEL_L0_SPAN;
 
         l1_kernel[vpn1(chunk_base)] = pa_to_pte((unsigned long)l0_kernel[t]) | PTE_V;
@@ -1465,13 +1661,8 @@ pagetable_t vm_make_user_pagetable(int pid) {
         }
     }
 
-    /*
-     * Temporarily expose a small linked user-code window as user executable.
-     * This lets existing user_entry/user_main code keep running at its current
-     * linked virtual address while we bring up VM incrementally.
-     */
-    code_start = page_down(user_entry_pa_for_pid(pid));
-    code_end = page_up(code_start + USER_CODE_WINDOW_SIZE);
+    code_start = page_down((unsigned long)__usertext_start);
+    code_end = page_up((unsigned long)__usertext_end);
 
     for (unsigned long va = code_start; va < code_end; va += PAGE_SIZE) {
         vm_map_page((pagetable_t)l2, va, va, PTE_R | PTE_X | PTE_U);

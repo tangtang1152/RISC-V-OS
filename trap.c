@@ -8,11 +8,100 @@
 #define SCAUSE_INTERRUPT (1UL << 63)
 #define SCAUSE_CODE(x)   ((x) & 0xfff)
 
+#define SCAUSE_ECALL_U           8
+#define SCAUSE_INST_PAGE_FAULT   12
+#define SCAUSE_LOAD_PAGE_FAULT   13
+#define SCAUSE_STORE_PAGE_FAULT  15
+
 static int proc_is_zombie(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
         return 0;
     }
     return procs[pid].state == PROC_ZOMBIE;
+}
+
+static int is_user_fault(void) {
+    return (r_sstatus() & (1UL << 8)) == 0; //SPP
+}
+
+static int is_page_fault(unsigned long scause) {
+    return scause == SCAUSE_INST_PAGE_FAULT ||
+           scause == SCAUSE_LOAD_PAGE_FAULT ||
+           scause == SCAUSE_STORE_PAGE_FAULT;
+}
+
+static const char *page_fault_name(unsigned long scause) {
+    switch (scause) {
+        case SCAUSE_INST_PAGE_FAULT:
+            return "instruction page fault";
+        case SCAUSE_LOAD_PAGE_FAULT:
+            return "load page fault";
+        case SCAUSE_STORE_PAGE_FAULT:
+            return "store page fault";
+        default:
+            return "unknown page fault";
+    }
+}
+
+static void panic_trap(const char *prefix, unsigned long scause) {
+    print_str(prefix);
+    print_hex(scause);
+    print_str(", sepc=");
+    print_hex(r_sepc());
+    print_str(", stval=");
+    print_hex(r_stval());
+    print_str(", current pid=");
+    if (current) {
+        print_hex((unsigned long)current->pid);
+    } else {
+        print_str("none");
+    }
+    print_str("\n");
+
+    proc_dump();
+
+    while (1) {}
+}
+
+static void kill_current_user_fault(struct trap_frame *tf, unsigned long scause) {
+    int old_pid = current ? current->pid : -1;
+
+    print_str("[KERNEL] user ");
+    print_str(page_fault_name(scause));
+    print_str(": pid=");
+    if (current) {
+        print_hex((unsigned long)current->pid);
+    } else {
+        print_str("none");
+    }
+    print_str(", scause=");
+    print_hex(scause);
+    print_str(", sepc=");
+    print_hex(r_sepc());
+    print_str(", stval=");
+    print_hex(r_stval());
+    print_str("\n");
+
+    if (!current) {
+        print_str("[KERNEL] no current process on user page fault\n");
+        while (1) {}
+    }
+
+    current->exit_code = -1;
+    current->state = PROC_ZOMBIE;
+    current->block_reason = PROC_BLOCK_NONE;
+    current->wait_pid = -1;
+    proc_wakeup_waiters(current->pid);
+
+    schedule();
+
+    print_str("[KERNEL] page fault switch: pid=");
+    print_hex((unsigned long)old_pid);
+    print_str(" -> pid=");
+    print_hex((unsigned long)current->pid);
+    print_str("\n");
+
+    vm_switch_to_user(current->user_pagetable);
 }
 
 void trap_handler(struct trap_frame *tf) {
@@ -42,14 +131,19 @@ void trap_handler(struct trap_frame *tf) {
             return;
         }
 
-        print_str("[KERNEL] unhandled time interrupt, scause=");
-        print_hex(scause);
-        print_str("\n");
-        proc_dump();
-        while (1) {}
+        panic_trap("[KERNEL] unhandled timer interrupt, scause=", scause);
     }
 
-    if (scause == 8) {   // Environment call from U-mode
+    if (is_page_fault(scause)) {
+        if (is_user_fault()) {
+            kill_current_user_fault(tf, scause);
+            return;
+        }
+
+        panic_trap("[KERNEL] supervisor page fault, scause=", scause);
+    }
+
+    if (scause == SCAUSE_ECALL_U) {   // Environment call from U-mode
         int advance_sepc = 1;
         int need_schedule = 0;
         int old_pid = -1;
@@ -196,21 +290,5 @@ void trap_handler(struct trap_frame *tf) {
         return;
     }
 
-    print_str("[KERNEL] unhandled trap, scause=");
-    print_hex(scause);
-    print_str(", sepc=");
-    print_hex(r_sepc());
-    print_str(", stval=");
-    print_hex(r_stval());
-    print_str(", current pid=");
-    if (current) {
-        print_hex((unsigned long)current->pid);
-    } else {
-        print_str("none");
-    }
-    print_str("\n");
-
-    proc_dump();
-
-    while (1) {}
+    panic_trap("[KERNEL] unhandled trap, scause=", scause);
 }

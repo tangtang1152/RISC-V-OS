@@ -86,7 +86,7 @@ int proc_switch(void) {
 
         if (procs[next].state == PROC_RUNNABLE) {
             current = &procs[next];
-            current->state = PROC_RUNNING;
+            current->state = PROC_RUNNING;7
             return 0;
         }
     }

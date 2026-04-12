@@ -21,10 +21,10 @@ USER_TEXT void user_main(void)
     sys_printhex((unsigned long)code);
     sys_printstr("\n");
 
-    if (code == 42 && sum == 42 && magic == 'Z') {
-        sys_printstr("[USER0] TEST PASS\n");
+    if (code == -1 && sum == 42 && magic == 'Z') {
+        sys_printstr("[USER0] PAGE FAULT TEST PASS\n");
     } else {
-        sys_printstr("[USER0] TEST FAIL\n");
+        sys_printstr("[USER0] PAGE FAULT TEST FAIL\n");
     }
 
     sys_exit(0);
@@ -46,8 +46,11 @@ USER_TEXT void user_main2(void)
     sys_sleep(3);
     sys_yield();
 
-    sys_printstr("[USER1] exit now\n");
-    sys_exit(42);
+    sys_printstr("[USER1] trigger page fault by store to invalid VA\n");
+    *((volatile unsigned long *)0x0) = 0x1234;
+
+    sys_printstr("[USER1] unexpected: still alive after fault\n");
+    sys_exit(99);
 
     while (1) { }
 }
