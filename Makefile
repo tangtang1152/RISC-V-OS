@@ -8,8 +8,8 @@ LDFLAGS = -T linker.ld -nostdlib
 
 all: kernel.bin
 
-kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c proc.c proc.h timer.h timer.c vm.h vm.c memlayout.h
-	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c proc.c timer.c vm.c $(LDFLAGS) -o kernel.elf
+kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c proc.c proc.h timer.h timer.c vm.h vm.c memlayout.h uaccess.c uaccess.h
+	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c proc.c timer.c vm.c uaccess.c $(LDFLAGS) -o kernel.elf
 
 kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary kernel.elf kernel.bin
