@@ -6,10 +6,12 @@
 extern void user_entry(void);
 extern void user_entry2(void);
 
+extern char __usertext_start[];
+
 struct proc procs[PROC_NUM];
 struct proc *current = 0;
 
-static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
+static void init_proc_context(struct proc *p, int pid, unsigned long entry_offset) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
     p->wakeup_tick = 0;
@@ -68,12 +70,12 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->tf.t5 = 0;
     p->tf.t6 = 0;
 
-    p->tf.sepc = entry;
+    p->tf.sepc = USER_TEXT_BASE + entry_offset;
 }
 
 void proc_init(void) {
-    init_proc_context(&procs[0], 0, (unsigned long)user_entry);
-    init_proc_context(&procs[1], 1, (unsigned long)user_entry2);
+    init_proc_context(&procs[0], 0, (unsigned long)user_entry - (unsigned long)__usertext_start);
+    init_proc_context(&procs[1], 1, (unsigned long)user_entry2 - (unsigned long)__usertext_start);
 
     current = &procs[0];
     current->state = PROC_RUNNING;
@@ -86,7 +88,7 @@ int proc_switch(void) {
 
         if (procs[next].state == PROC_RUNNABLE) {
             current = &procs[next];
-            current->state = PROC_RUNNING;7
+            current->state = PROC_RUNNING;
             return 0;
         }
     }
