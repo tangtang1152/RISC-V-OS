@@ -6,7 +6,7 @@
 
 static const char u0_pid[] USER_RODATA = "[USER0] pid=";
 static const char u0_magic[] USER_RODATA = " magic=";
-static const char u0_add[] USER_RODATA = " add(20,22)=";
+static const char u0_add[] USER_RODATA = " add(20,22) + user_data_value + user_bss_value =";
 static const char u0_nl[] USER_RODATA = "\n";
 static const char u0_wait[] USER_RODATA = "[USER0] wait pid=1\n";
 static const char u0_wait_ret[] USER_RODATA = "[USER0] wait returned, exit code=";

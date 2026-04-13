@@ -13,6 +13,8 @@
 #define SCAUSE_LOAD_PAGE_FAULT   13
 #define SCAUSE_STORE_PAGE_FAULT  15
 
+#define SSTATUS_SUM (1UL << 18)
+
 static int proc_is_zombie(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
         return 0;
@@ -154,10 +156,16 @@ void trap_handler(struct trap_frame *tf) {
                 tf->a0 = 0;
                 break;
             
-            case SYS_PRINTSTR:
+            case SYS_PRINTSTR: {
+                unsigned long sstatus = r_sstatus();
+
+                w_sstatus(sstatus | SSTATUS_SUM);
                 print_str((const char *)tf->a0);
+                w_sstatus(sstatus);
+
                 tf->a0 = 0;
                 break;
+            }
 
             case SYS_PRINTHEX:
                 print_hex(tf->a0);
