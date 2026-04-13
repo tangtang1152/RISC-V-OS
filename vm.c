@@ -4,22 +4,17 @@
 #include "riscv.h"
 #include "memlayout.h"
 
-extern char __userimage_start[];
-extern char __userimage_end[];
 extern char __usertext_start[];
 extern char __usertext_end[];
 extern char __userrodata_start[];
 extern char __userrodata_end[];
 
-#define USER_PT_PAGE_COUNT (6 + KERNEL_L0_TABLES)
+#define USER_PT_PAGE_COUNT (5 + KERNEL_L0_TABLES)
 
 static pte_t user_pts[PROC_NUM][USER_PT_PAGE_COUNT][PT_ENTRY_COUNT]
     __attribute__((aligned(PAGE_SIZE)));
 
-static unsigned char user_text_pages[PROC_NUM][USER_TEXT_MAX_SIZE]
-    __attribute__((aligned(PAGE_SIZE)));
-
-static unsigned char user_rodata_pages[PROC_NUM][USER_RODATA_MAX_SIZE]
+static unsigned char user_image_pages[PROC_NUM][USER_IMAGE_MAX_SIZE]
     __attribute__((aligned(PAGE_SIZE)));
 
 static unsigned char user_stack_pages[PROC_NUM][USER_STACK_SIZE]
@@ -29,11 +24,10 @@ static unsigned char user_stack_pages[PROC_NUM][USER_STACK_SIZE]
  * Layout per process:
  *   [0] root L2
  *   [1] low L1 (for low user region)
- *   [2] low L0 (text leaf table)
- *   [3] low L0 (rodata leaf table)
- *   [4] low L0 (stack leaf table)
- *   [5] kernel L1
- *   [6..] kernel L0 tables covering KERNEL_MAP_SIZE
+ *   [2] low L0 (user image leaf table)
+ *   [3] low L0 (stack leaf table)
+ *   [4] kernel L1
+ *   [5..] kernel L0 tables covering KERNEL_MAP_SIZE
  */
 
 static inline unsigned long vpn2(unsigned long va) {
@@ -64,30 +58,6 @@ static inline unsigned long pte_to_pa(pte_t pte) {
     return ((pte >> 10) << PAGE_SHIFT);
 }
 
-void vm_init(void) {
-    for (unsigned long p = 0; p < PROC_NUM; p++) {
-        for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
-            for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
-                user_pts[p][table][i] = 0;
-            }
-        }
-
-        for (unsigned long i = 0; i < USER_TEXT_MAX_SIZE; i++) {
-            user_text_pages[p][i] = 0;
-        }
-
-        for (unsigned long i = 0; i < USER_RODATA_MAX_SIZE; i++) {
-            user_rodata_pages[p][i] = 0;
-        }
-
-        for (unsigned long i = 0; i < USER_STACK_SIZE; i++) {
-            user_stack_pages[p][i] = 0;
-        }
-    }
-
-    print_str("vm scaffold init done\n");
-}
-
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm) {
     pte_t *l2 = (pte_t *)pt;
     pte_t *l1;
@@ -113,19 +83,50 @@ void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned lo
     l0[vpn0(va)] = pa_to_pte(pa) | leaf_perm | PTE_V;
 }
 
+unsigned long vm_make_satp(pagetable_t pt) {
+    return SATP_MODE_SV39 | (pt >> PAGE_SHIFT);
+}
+
+void vm_switch_to_user(pagetable_t pt) {
+    if (!pt) {
+        return;
+    }
+
+    w_satp(vm_make_satp(pt));
+    sfence_vma();
+}
+
+void vm_init(void) {
+    for (unsigned long p = 0; p < PROC_NUM; p++) {
+        for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
+            for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
+                user_pts[p][table][i] = 0;
+            }
+        }
+
+        for (unsigned long i = 0; i < USER_IMAGE_MAX_SIZE; i++) {
+            user_image_pages[p][i] = 0;
+        }
+
+        for (unsigned long i = 0; i < USER_STACK_SIZE; i++) {
+            user_stack_pages[p][i] = 0;
+        }
+    }
+
+    print_str("vm scaffold init done\n");
+}
+
 pagetable_t vm_make_user_pagetable(int pid) {
     pte_t *l2;
     pte_t *l1_low;
-    pte_t *l0_text;
-    pte_t *l0_rodata;
+    pte_t *l0_image;
     pte_t *l0_stack;
     pte_t *l1_kernel;
     pte_t *l0_kernel[KERNEL_L0_TABLES];
     unsigned long stack_bottom;
-    unsigned long text_size;
-    unsigned long text_map_size;
-    unsigned long rodata_size;
-    unsigned long rodata_map_size;
+    unsigned long image_size;
+    unsigned long image_map_size;
+    unsigned long rodata_off;
 
     if (pid < 0 || pid >= PROC_NUM) {
         return 0;
@@ -133,13 +134,12 @@ pagetable_t vm_make_user_pagetable(int pid) {
 
     l2 = user_pts[pid][0];
     l1_low = user_pts[pid][1];
-    l0_text = user_pts[pid][2];
-    l0_rodata = user_pts[pid][3];
-    l0_stack = user_pts[pid][4];
-    l1_kernel = user_pts[pid][5];
+    l0_image = user_pts[pid][2];
+    l0_stack = user_pts[pid][3];
+    l1_kernel = user_pts[pid][4];
 
     for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
-        l0_kernel[t] = user_pts[pid][6 + t];
+        l0_kernel[t] = user_pts[pid][5 + t];
     }
 
     for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
@@ -151,46 +151,33 @@ pagetable_t vm_make_user_pagetable(int pid) {
     stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
 
     l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
-    l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_text) | PTE_V;
-    l1_low[vpn1(USER_RODATA_BASE)] = pa_to_pte((unsigned long)l0_rodata) | PTE_V;
+    l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
     l1_low[vpn1(stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
 
-    text_size = (unsigned long)(__usertext_end - __usertext_start);
-    text_map_size = page_up(text_size);
+    image_size = (unsigned long)(__userrodata_end - __usertext_start);
+    image_map_size = page_up(image_size);
+    rodata_off = (unsigned long)(__userrodata_start - __usertext_start);
 
-    if (text_map_size > USER_TEXT_MAX_SIZE) {
-        print_str("[KERNEL] user text too large\n");
+    if (image_map_size > USER_IMAGE_MAX_SIZE) {
+        print_str("[KERNEL] user image too large\n");
         return 0;
     }
 
-    for (unsigned long i = 0; i < text_size; i++) {
-        user_text_pages[pid][i] = __usertext_start[i];
+    for (unsigned long i = 0; i < image_size; i++) {
+        user_image_pages[pid][i] = __usertext_start[i];
     }
 
-    for (unsigned long off = 0; off < text_map_size; off += PAGE_SIZE) {
+    for (unsigned long off = 0; off < image_map_size; off += PAGE_SIZE) {
+        unsigned long perm = PTE_R | PTE_U;
+
+        if (off < rodata_off) {
+            perm |= PTE_X;
+        }
+
         vm_map_page((pagetable_t)l2,
                     USER_TEXT_BASE + off,
-                    (unsigned long)user_text_pages[pid] + off,
-                    PTE_R | PTE_X | PTE_U);
-    }
-
-    rodata_size = (unsigned long)(__userrodata_end - __userrodata_start);
-    rodata_map_size = page_up(rodata_size);
-
-    if (rodata_map_size > USER_RODATA_MAX_SIZE) {
-        print_str("[KERNEL] user rodata too large\n");
-        return 0;
-    }
-
-    for (unsigned long i = 0; i < rodata_size; i++) {
-        user_rodata_pages[pid][i] = __userrodata_start[i];
-    }
-
-    for (unsigned long off = 0; off < rodata_map_size; off += PAGE_SIZE) {
-        vm_map_page((pagetable_t)l2,
-                    USER_RODATA_BASE + off,
-                    (unsigned long)user_rodata_pages[pid] + off,
-                    PTE_R | PTE_U);
+                    (unsigned long)user_image_pages[pid] + off,
+                    perm);
     }
 
     vm_map_page((pagetable_t)l2,
@@ -214,17 +201,4 @@ pagetable_t vm_make_user_pagetable(int pid) {
     }
 
     return (pagetable_t)l2;
-}
-
-unsigned long vm_make_satp(pagetable_t pt) {
-    return SATP_MODE_SV39 | (pt >> PAGE_SHIFT);
-}
-
-void vm_switch_to_user(pagetable_t pt) {
-    if (!pt) {
-        return;
-    }
-
-    w_satp(vm_make_satp(pt));
-    sfence_vma();
 }
