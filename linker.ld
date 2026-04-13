@@ -36,6 +36,22 @@ SECTIONS
     . = ALIGN(4096);
     __userrodata_end = .;
 
+    __userdata_start = .;
+    .userdata : {
+        *(.userdata)
+        *(.userdata.*)
+    }
+    . = ALIGN(4096);
+    __userdata_end = .;
+
+    __userbss_start = .;
+    .userbss : {
+        *(.userbss)
+        *(.userbss.*)
+    }
+    . = ALIGN(4096);
+    __userbss_end = .;
+
     __userimage_end = .;
 
     .rodata : {

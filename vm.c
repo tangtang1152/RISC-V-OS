@@ -4,10 +4,16 @@
 #include "riscv.h"
 #include "memlayout.h"
 
+extern char __userimage_start[];
+extern char __userimage_end[];
 extern char __usertext_start[];
 extern char __usertext_end[];
 extern char __userrodata_start[];
 extern char __userrodata_end[];
+extern char __userdata_start[];
+extern char __userdata_end[];
+extern char __userbss_start[];
+extern char __userbss_end[];
 
 #define USER_PT_PAGE_COUNT (5 + KERNEL_L0_TABLES)
 
@@ -127,6 +133,9 @@ pagetable_t vm_make_user_pagetable(int pid) {
     unsigned long image_size;
     unsigned long image_map_size;
     unsigned long rodata_off;
+    unsigned long data_off;
+    unsigned long bss_off;
+    unsigned long bss_end_off;
 
     if (pid < 0 || pid >= PROC_NUM) {
         return 0;
@@ -148,15 +157,23 @@ pagetable_t vm_make_user_pagetable(int pid) {
         }
     }
 
+    for (unsigned long i = 0; i < USER_IMAGE_MAX_SIZE; i++) {
+        user_image_pages[pid][i] = 0;
+    }
+
     stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
 
     l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
     l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
     l1_low[vpn1(stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
 
-    image_size = (unsigned long)(__userrodata_end - __usertext_start);
-    image_map_size = page_up(image_size);
+    image_size = (unsigned long)(__userdata_end - __usertext_start);
+    image_map_size = page_up((unsigned long)(__userbss_end - __usertext_start));
+
     rodata_off = (unsigned long)(__userrodata_start - __usertext_start);
+    data_off = (unsigned long)(__userdata_start - __usertext_start);
+    bss_off = (unsigned long)(__userbss_start - __usertext_start);
+    bss_end_off = (unsigned long)(__userbss_end - __usertext_start);
 
     if (image_map_size > USER_IMAGE_MAX_SIZE) {
         print_str("[KERNEL] user image too large\n");
@@ -168,10 +185,14 @@ pagetable_t vm_make_user_pagetable(int pid) {
     }
 
     for (unsigned long off = 0; off < image_map_size; off += PAGE_SIZE) {
-        unsigned long perm = PTE_R | PTE_U;
+        unsigned long perm;
 
         if (off < rodata_off) {
-            perm |= PTE_X;
+            perm = PTE_R | PTE_X | PTE_U;
+        } else if (off < data_off) {
+            perm = PTE_R | PTE_U;
+        } else {
+            perm = PTE_R | PTE_W | PTE_U; // bss
         }
 
         vm_map_page((pagetable_t)l2,

@@ -1,5 +1,7 @@
-#define USER_TEXT   __attribute__((section(".usertext")))
-#define USER_RODATA __attribute__((section(".userrodata")))
+#define USER_TEXT    __attribute__((section(".usertext")))
+#define USER_RODATA  __attribute__((section(".userrodata")))
+#define USER_DATA    __attribute__((section(".userdata")))
+#define USER_BSS     __attribute__((section(".userbss")))
 #include "syscall.h"
 
 static const char u0_pid[] USER_RODATA = "[USER0] pid=";
@@ -16,11 +18,18 @@ static const char u1_add[] USER_RODATA = " add(10,32)=";
 static const char u1_sleep[] USER_RODATA = "[USER1] sleep 3 ticks\n";
 static const char u1_exit[] USER_RODATA = "[USER1] exit now\n";
 
-USER_TEXT void user_main(void)
-{
+//test
+static long user_data_value USER_DATA = 7;
+static long user_bss_value USER_BSS;
+
+USER_TEXT void user_main(void){
     long pid = sys_getpid();
     long magic = sys_get_magic();
     long sum = sys_add(20, 22);
+
+    user_bss_value += 35;
+    sum = sys_add(sum, user_data_value);
+    sum = sys_add(sum, user_bss_value);
 
     sys_printstr(u0_pid);
     sys_printhex((unsigned long)pid);
@@ -36,7 +45,7 @@ USER_TEXT void user_main(void)
     sys_printhex((unsigned long)code);
     sys_printstr(u0_nl);
 
-    if (code == 42 && sum == 42 && magic == 'Z') {
+    if (code == 42 && sum == 84 && magic == 'Z') {
         sys_printstr(u0_pass);
     } else {
         sys_printstr(u0_fail);
@@ -46,8 +55,7 @@ USER_TEXT void user_main(void)
     while (1) { }
 }
 
-USER_TEXT void user_main2(void)
-{
+USER_TEXT void user_main2(void){
     long pid = sys_getpid();
     long sum = sys_add(10, 32);
 
