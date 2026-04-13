@@ -9,31 +9,21 @@
 
 .balign 4
 kernel_entry:
-    # swap:
-    #   t0 <- old sscratch
-    #   sscratch <- old t0
-    #
-    # Current convention:
-    #   - for U-traps, sscratch holds &current->scratch
-    #   - for current temporary S-trap handling, schedule()->wfi also primes
-    #     sscratch with &current->scratch before idle wait
-    csrrw t0, sscratch, t0
+    csrrw t0, sscratch, t0   # t0 = &scratch, sscratch = user_t0
 
-    # save original t1/t2 early into scratch
-    sd t1, 0(t0)              # scratch.user_t1
-    sd t2, 8(t0)              # scratch.user_t2
+    sd t1, 0(t0)             # scratch.user_t1
+    sd t2, 8(t0)             # scratch.user_t2
 
-    # distinguish trap source by SPP
-    #   SPP=0 -> trap came from U-mode
-    #   SPP=1 -> trap came from S-mode
+    csrr t1, sscratch        # t1 = saved user_t0
+    sd t1, 16(t0)            # scratch.user_t0
+    csrw sscratch, t0        # restore sscratch to &scratch ASAP
+
     csrr t1, sstatus
     andi t1, t1, 0x100
     bnez t1, kernel_trap_entry
 
 user_trap_entry:
-    # original user t0 is now in sscratch
-    csrr t1, sscratch
-    sd t1, 16(t0)             # scratch.user_t0
+    # scratch.user_t0 was already captured in kernel_entry.
 
     sd sp, 24(t0)             # scratch.user_sp
 
@@ -109,8 +99,8 @@ kernel_trap_entry:
     sd gp, 16(sp)
     sd tp, 24(sp)
 
-    # original kernel t0 was swapped into sscratch at entry
-    csrr t1, sscratch
+    # original kernel t0 was already captured at scratch.user_t0 in kernel_entry
+    ld t1, 16(t0)
     sd t1, 32(sp)
 
     # original kernel t1/t2 were saved into scratch at entry
