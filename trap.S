@@ -2,37 +2,47 @@
 
 .section .text
 .globl kernel_entry
+.globl user_trap_entry
 .globl user_entry
 .globl user_entry2
 .global user_return
 .global kernel_return
 
 .balign 4
-kernel_entry:
-    csrrw t0, sscratch, t0   # t0 = &scratch, sscratch = user_t0
-
-    sd t1, 0(t0)             # scratch.user_t1
-    sd t2, 8(t0)             # scratch.user_t2
-
-    csrr t1, sscratch        # t1 = saved user_t0
-    sd t1, 16(t0)            # scratch.user_t0
-    csrw sscratch, t0        # restore sscratch to &scratch ASAP
-
-    csrr t1, sstatus
-    andi t1, t1, 0x100
-    bnez t1, kernel_trap_entry
-
 user_trap_entry:
-    # scratch.user_t0 was already captured in kernel_entry.
+    # Trap came from U-mode.
+    #
+    # sscratch convention while user is running:
+    #   sscratch = &current->scratch
+    #
+    # After csrrw:
+    #   t0 = &current->scratch
+    #   sscratch = user t0
+    csrrw t0, sscratch, t0
 
+    # Save user temporaries that would otherwise be clobbered early.
+    sd t1, 0(t0)              # scratch.user_t1
+    sd t2, 8(t0)              # scratch.user_t2
+
+    # Save original user t0, then restore sscratch ASAP so nested S-traps
+    # will still see a valid scratch pointer if they ever need it later.
+    csrr t1, sscratch
+    sd t1, 16(t0)             # scratch.user_t0
+    csrw sscratch, t0
+
+    # Save user sp into scratch before switching stacks.
     sd sp, 24(t0)             # scratch.user_sp
 
-    # load pointers prepared in proc_init()
+    # Load trapframe pointer and kernel stack top prepared by proc_init().
     ld t1, 32(t0)             # scratch.tf_ptr
     ld sp, 40(t0)             # scratch.kstack_top
 
-    # t1 = trap_frame *
-    # t0 = scratch *
+    # We are now running in kernel context on kernel stack.
+    # Any nested trap from here on must go directly to kernel_entry.
+    la t2, kernel_entry
+    csrw stvec, t2
+
+    # Save user register context into trapframe.
     sd ra, 0(t1)
 
     ld t2, 24(t0)
@@ -84,31 +94,27 @@ user_trap_entry:
     call trap_handler
     j user_return
 
+
 .balign 4
-kernel_trap_entry:
-    # We arrived here from S-mode.
-    # Use a temporary trap_frame on the current kernel stack.
+kernel_entry:
+    # Trap came from S-mode.
+    #
+    # Do NOT depend on sscratch or user-trap conventions here.
+    # Just build a temporary trapframe directly on the current kernel stack.
     addi sp, sp, -256
 
     sd ra, 0(sp)
 
-    # interrupted kernel sp = current sp + 256
-    addi t1, sp, 256
-    sd t1, 8(sp)
+    # Save interrupted kernel sp = current sp + 256
+    addi t0, sp, 256
+    sd t0, 8(sp)
 
     sd gp, 16(sp)
     sd tp, 24(sp)
 
-    # original kernel t0 was already captured at scratch.user_t0 in kernel_entry
-    ld t1, 16(t0)
-    sd t1, 32(sp)
-
-    # original kernel t1/t2 were saved into scratch at entry
-    ld t1, 0(t0)
+    sd t0, 32(sp)
     sd t1, 40(sp)
-
-    ld t1, 8(t0)
-    sd t1, 48(sp)
+    sd t2, 48(sp)
 
     sd s0, 56(sp)
     sd s1, 64(sp)
@@ -137,23 +143,32 @@ kernel_trap_entry:
     sd t5, 232(sp)
     sd t6, 240(sp)
 
-    csrr t1, sepc
-    sd t1, 248(sp)
+    csrr t0, sepc
+    sd t0, 248(sp)
 
+    # 把这块临时 trapframe 的地址传给 trap_handler
+    # S-trap 不再关心 current->scratch，也不关心 sscratch 里有什么。
     mv a0, sp
     call trap_handler
+
     j kernel_return
+
 
 .balign 4
 user_return:
-    # after handler, reload current scratch/tf because current may have changed
+    # trap_handler may have switched current, so reload everything from current.
     la t0, current
     ld t0, 0(t0)              # t0 = current
-    addi t0, t0, 0            # t0 = &current->scratch
-    addi t1, t0, 48           # t1 = &current->tf
+    addi t1, t0, 48           # t1 = &current->tf   (scratch is first field)
 
-    # while back in user mode, sscratch must point to current scratch
+    # While user runs:
+    #   sscratch = &current->scratch
     csrw sscratch, t0
+
+    # While user runs:
+    #   traps must enter through user_trap_entry
+    la t2, user_trap_entry
+    csrw stvec, t2
 
     ld ra, 0(t1)
 
@@ -193,24 +208,31 @@ user_return:
     ld t2, 8(t1)
     mv sp, t2                 # restore user sp
 
-    # restore user t0/t1/t2 last
+    # Restore user t0/t1/t2 last.
     ld t0, 32(t1)
     ld t2, 48(t1)
     ld t1, 40(t1)
 
     sret
 
+
 .balign 4
 kernel_return:
-    # restore interrupted kernel context from temporary trap_frame on current sp
+    # Restore interrupted kernel context from temporary stack trapframe.
 
-    ld t1, 248(sp)
-    csrw sepc, t1
+    ld t0, 248(sp)
+    csrw sepc, t0
 
-    # restore sscratch to &current->scratch for future U-traps / idle traps
+    # Keep sscratch pointing at current->scratch for the next user trap.
+    # 虽然当前是从 S-trap 返回 S-mode，但你之后迟早还会回到用户态。
     la t3, current
-    ld t3, 0(t3)              # current, and scratch is first field
+    ld t3, 0(t3)
     csrw sscratch, t3
+
+    # While staying in kernel:
+    #   traps must enter through kernel_entry
+    la t4, kernel_entry
+    csrw stvec, t4
 
     ld ra, 0(sp)
     ld gp, 16(sp)
@@ -243,13 +265,14 @@ kernel_return:
     ld t5, 232(sp)
     ld t6, 240(sp)
 
-    # restore t0/t1/t2 last
+    # Restore t0/t1/t2 last.
     ld t2, 48(sp)
     ld t1, 40(sp)
     ld t0, 32(sp)
 
     addi sp, sp, 256
     sret
+
 
 .section .usertext
 .balign 4096
