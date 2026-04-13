@@ -5,7 +5,6 @@
 
 extern void user_entry(void);
 extern void user_entry2(void);
-
 extern char __usertext_start[];
 
 struct proc procs[PROC_NUM];

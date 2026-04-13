@@ -18,6 +18,8 @@ SECTIONS
     }
 
     . = ALIGN(4096);
+    __userimage_start = .;
+
     __usertext_start = .;
     .usertext : {
         *(.usertext)
@@ -25,7 +27,17 @@ SECTIONS
     }
     . = ALIGN(4096);
     __usertext_end = .;
-    
+
+    __userrodata_start = .;
+    .userrodata : {
+        *(.userrodata)
+        *(.userrodata.*)
+    }
+    . = ALIGN(4096);
+    __userrodata_end = .;
+
+    __userimage_end = .;
+
     .rodata : {
         *(.rodata .rodata.*)
     }

@@ -1,5 +1,20 @@
-#define USER_TEXT __attribute__((section(".usertext")))
+#define USER_TEXT   __attribute__((section(".usertext")))
+#define USER_RODATA __attribute__((section(".userrodata")))
 #include "syscall.h"
+
+static const char u0_pid[] USER_RODATA = "[USER0] pid=";
+static const char u0_magic[] USER_RODATA = " magic=";
+static const char u0_add[] USER_RODATA = " add(20,22)=";
+static const char u0_nl[] USER_RODATA = "\n";
+static const char u0_wait[] USER_RODATA = "[USER0] wait pid=1\n";
+static const char u0_wait_ret[] USER_RODATA = "[USER0] wait returned, exit code=";
+static const char u0_pass[] USER_RODATA = "[USER0] TEST PASS\n";
+static const char u0_fail[] USER_RODATA = "[USER0] TEST FAIL\n";
+
+static const char u1_pid[] USER_RODATA = "[USER1] pid=";
+static const char u1_add[] USER_RODATA = " add(10,32)=";
+static const char u1_sleep[] USER_RODATA = "[USER1] sleep 3 ticks\n";
+static const char u1_exit[] USER_RODATA = "[USER1] exit now\n";
 
 USER_TEXT void user_main(void)
 {
@@ -7,24 +22,24 @@ USER_TEXT void user_main(void)
     long magic = sys_get_magic();
     long sum = sys_add(20, 22);
 
-    sys_printstr("[USER0] pid=");
+    sys_printstr(u0_pid);
     sys_printhex((unsigned long)pid);
-    sys_printstr(" magic=");
+    sys_printstr(u0_magic);
     sys_printhex((unsigned long)magic);
-    sys_printstr(" add(20,22)=");
+    sys_printstr(u0_add);
     sys_printhex((unsigned long)sum);
-    sys_printstr("\n");
+    sys_printstr(u0_nl);
 
-    sys_printstr("[USER0] wait pid=1\n");
+    sys_printstr(u0_wait);
     long code = sys_wait(1);
-    sys_printstr("[USER0] wait returned, exit code=");
+    sys_printstr(u0_wait_ret);
     sys_printhex((unsigned long)code);
-    sys_printstr("\n");
+    sys_printstr(u0_nl);
 
-    if (code == -1 && sum == 42 && magic == 'Z') {
-        sys_printstr("[USER0] PAGE FAULT TEST PASS\n");
+    if (code == 42 && sum == 42 && magic == 'Z') {
+        sys_printstr(u0_pass);
     } else {
-        sys_printstr("[USER0] PAGE FAULT TEST FAIL\n");
+        sys_printstr(u0_fail);
     }
 
     sys_exit(0);
@@ -36,21 +51,18 @@ USER_TEXT void user_main2(void)
     long pid = sys_getpid();
     long sum = sys_add(10, 32);
 
-    sys_printstr("[USER1] pid=");
+    sys_printstr(u1_pid);
     sys_printhex((unsigned long)pid);
-    sys_printstr(" add(10,32)=");
+    sys_printstr(u1_add);
     sys_printhex((unsigned long)sum);
-    sys_printstr("\n");
+    sys_printstr(u0_nl);
 
-    sys_printstr("[USER1] sleep 3 ticks\n");
+    sys_printstr(u1_sleep);
     sys_sleep(3);
     sys_yield();
 
-    sys_printstr("[USER1] trigger page fault by store to invalid VA\n");
-    *((volatile unsigned long *)0x0) = 0x1234;
-
-    sys_printstr("[USER1] unexpected: still alive after fault\n");
-    sys_exit(99);
+    sys_printstr(u1_exit);
+    sys_exit(42);
 
     while (1) { }
 }

@@ -5,11 +5,12 @@
  * Intended future user virtual address layout.
  */
 #define USER_BASE             0x0000000000001000UL
+#define USER_TEXT_BASE        USER_BASE
+#define USER_RODATA_BASE      (USER_TEXT_BASE + USER_TEXT_MAX_SIZE)
+#define USER_TEXT_MAX_SIZE    0x0000000000010000UL   /* 64 KiB */
+#define USER_RODATA_MAX_SIZE  0x0000000000010000UL   /* 64 KiB */
 #define USER_STACK_TOP        0x0000000040000000UL
 #define USER_STACK_SIZE       0x0000000000001000UL
-
-#define USER_TEXT_BASE         USER_BASE
-#define USER_TEXT_MAX_SIZE     0x0000000000010000UL   /* 64 KiB */
 
 /*
  * Shared kernel mapping window used by the first VM-enabled version.
