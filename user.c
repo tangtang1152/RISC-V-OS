@@ -18,11 +18,17 @@ static const char u1_add[] USER_RODATA = " add(10,32)=";
 static const char u1_sleep[] USER_RODATA = "[USER1] sleep 3 ticks\n";
 static const char u1_exit[] USER_RODATA = "[USER1] exit now\n";
 
+static const char u0_copyout[] USER_RODATA = " copyout=";
+static const char u0_copyout_fail[] USER_RODATA = "[USER0] copyout failed\n";
+
 //test
 static long user_data_value USER_DATA = 7;
 static long user_bss_value USER_BSS;
 
-USER_TEXT void user_main(void){
+static unsigned long user_copyout_value USER_BSS;
+
+USER_TEXT void user_main(void)
+{
     long pid = sys_getpid();
     long magic = sys_get_magic();
     long sum = sys_add(20, 22);
@@ -31,13 +37,19 @@ USER_TEXT void user_main(void){
     sum = sys_add(sum, user_data_value);
     sum = sys_add(sum, user_bss_value);
 
-    sys_printstr(u0_pid);
-    sys_printhex((unsigned long)pid);
-    sys_printstr(u0_magic);
-    sys_printhex((unsigned long)magic);
-    sys_printstr(u0_add);
-    sys_printhex((unsigned long)sum);
-    sys_printstr(u0_nl);
+    if (sys_fillbuf(&user_copyout_value) == 0) {
+        sys_printstr(u0_pid);
+        sys_printhex((unsigned long)pid);
+        sys_printstr(u0_magic);
+        sys_printhex((unsigned long)magic);
+        sys_printstr(u0_add);
+        sys_printhex((unsigned long)sum);
+        sys_printstr(u0_copyout);
+        sys_printhex(user_copyout_value);
+        sys_printstr(u0_nl);
+    } else {
+        sys_printstr(u0_copyout_fail);
+    }
 
     sys_printstr(u0_wait);
     long code = sys_wait(1);
@@ -45,7 +57,10 @@ USER_TEXT void user_main(void){
     sys_printhex((unsigned long)code);
     sys_printstr(u0_nl);
 
-    if (code == 42 && sum == 84 && magic == 'Z') {
+    if (code == 42 &&
+        sum == 84 &&
+        magic == 'Z' &&
+        user_copyout_value == 0x1122334455667788UL) {
         sys_printstr(u0_pass);
     } else {
         sys_printstr(u0_fail);
@@ -156,4 +171,8 @@ USER_TEXT long sys_wait(long pid) {
 
 USER_TEXT long sys_getpid(void) {
     return do_syscall0(SYS_GETPID);
+}
+
+USER_TEXT long sys_fillbuf(unsigned long *buf) {
+    return do_syscall1(SYS_FILLBUF, (long)buf);
 }

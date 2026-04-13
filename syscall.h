@@ -11,6 +11,7 @@
 #define SYS_SLEEP     8
 #define SYS_GETPID    9
 #define SYS_WAIT      10
+#define SYS_FILLBUF   11
 
 long sys_putchar(char ch);
 long sys_printstr(const char *s);
@@ -22,5 +23,6 @@ long sys_yield(void);
 long sys_sleep(long tick_count);
 long sys_wait(long pid);
 long sys_getpid(void);
+long sys_fillbuf(unsigned long *buf);
 
 #endif

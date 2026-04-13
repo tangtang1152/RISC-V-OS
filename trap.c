@@ -262,6 +262,18 @@ void trap_handler(struct trap_frame *tf) {
                 break;
             }
 
+            case SYS_FILLBUF: {
+                unsigned long value = 0x1122334455667788UL;
+
+                if (copyout((void *)tf->a0, &value, sizeof(value)) < 0) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                tf->a0 = 0;
+                break;
+            }
+            
             default:
                 print_str("[KERNEL] unknown syscall, a7=");
                 print_hex(tf->a7);
