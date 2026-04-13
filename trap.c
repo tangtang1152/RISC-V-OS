@@ -14,6 +14,32 @@
 #define SCAUSE_STORE_PAGE_FAULT  15
 
 #define SSTATUS_SUM (1UL << 18)
+#define USER_STR_MAX 256
+
+static int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen) {
+    unsigned long sstatus;
+
+    if (!uaddr || !kbuf || maxlen == 0) {
+        return -1;
+    }
+
+    // 临时允许SUM，直接在内核中访问用户地址，复制完成后再关SUM
+    sstatus = r_sstatus();
+    w_sstatus(sstatus | SSTATUS_SUM);
+
+    for (unsigned long i = 0; i < maxlen; i++) {
+        char ch = uaddr[i];
+        kbuf[i] = ch;
+        if (ch == '\0') {
+            w_sstatus(sstatus); // 关SUM
+            return 0;
+        }
+    }
+
+    w_sstatus(sstatus);
+    kbuf[maxlen - 1] = '\0';
+    return -1;
+}
 
 static int proc_is_zombie(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
@@ -25,13 +51,11 @@ static int proc_is_zombie(int pid) {
 static int is_user_fault(void) {
     return (r_sstatus() & (1UL << 8)) == 0; //SPP
 }
-
 static int is_page_fault(unsigned long scause) {
     return scause == SCAUSE_INST_PAGE_FAULT ||
            scause == SCAUSE_LOAD_PAGE_FAULT ||
            scause == SCAUSE_STORE_PAGE_FAULT;
 }
-
 static const char *page_fault_name(unsigned long scause) {
     switch (scause) {
         case SCAUSE_INST_PAGE_FAULT:
@@ -64,7 +88,6 @@ static void panic_trap(const char *prefix, unsigned long scause) {
 
     while (1) {}
 }
-
 static void kill_current_user_fault(struct trap_frame *tf, unsigned long scause) {
     int old_pid = current ? current->pid : -1;
 
@@ -157,12 +180,14 @@ void trap_handler(struct trap_frame *tf) {
                 break;
             
             case SYS_PRINTSTR: {
-                unsigned long sstatus = r_sstatus();
+                char buf[USER_STR_MAX];
 
-                w_sstatus(sstatus | SSTATUS_SUM);
-                print_str((const char *)tf->a0);
-                w_sstatus(sstatus);
+                if (copyinstr((const char *)tf->a0, buf, sizeof(buf)) < 0) {
+                    tf->a0 = -1;
+                    break;
+                }
 
+                print_str(buf);
                 tf->a0 = 0;
                 break;
             }
