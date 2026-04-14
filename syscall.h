@@ -21,7 +21,7 @@ long sys_exit(long code);
 long sys_printhex(unsigned long x);
 long sys_yield(void);
 long sys_sleep(long tick_count);
-long sys_wait(long pid);
+long sys_wait(long pid, long *status);
 long sys_getpid(void);
 long sys_fillbuf(unsigned long *buf);
 

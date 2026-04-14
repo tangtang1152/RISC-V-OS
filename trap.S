@@ -12,7 +12,7 @@
 user_trap_entry:
     # Trap came from U-mode.
     #
-    # sscratch convention while user is running:
+    # sscratch convention while user is running: sscratch里面尽量一直放&current->scratch
     #   sscratch = &current->scratch
     #
     # After csrrw:

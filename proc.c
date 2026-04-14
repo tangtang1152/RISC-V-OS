@@ -13,11 +13,17 @@ struct proc *current = 0;
 static void init_proc_context(struct proc *p, int pid, unsigned long entry_offset) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
+    p->block_reason = PROC_BLOCK_NONE;   
+
     p->wakeup_tick = 0;
+
     p->wait_pid = -1;
     p->waited_by = -1;
-    p->block_reason = PROC_BLOCK_NONE;
+
+    p->waited_exit_code = 0;
     p->exit_code = 0;
+    p->wait_status_uaddr = 0;
+
     p->user_pagetable = vm_make_user_pagetable(pid);
 
     p->scratch.user_t0 = 0;
@@ -79,6 +85,7 @@ void proc_init(void) {
     current = &procs[0];
     current->state = PROC_RUNNING;
 }
+
 int proc_switch(void) {
     int start = current ? current->pid : 0;
 
@@ -161,8 +168,8 @@ void proc_wakeup_waiters(int exited_pid) {
     if (procs[waiter_pid].state == PROC_BLOCKED &&
         procs[waiter_pid].block_reason == PROC_BLOCK_WAIT &&
         procs[waiter_pid].wait_pid == exited_pid) {
-        procs[waiter_pid].wait_pid = -1;
-        procs[waiter_pid].tf.a0 = procs[exited_pid].exit_code;
+        // procs[waiter_pid].wait_pid = -1; 留到最后wait这件事完全结束再清
+        procs[waiter_pid].waited_exit_code = procs[exited_pid].exit_code;
         procs[waiter_pid].block_reason = PROC_BLOCK_NONE;
         procs[waiter_pid].state = PROC_RUNNABLE;
 
@@ -170,14 +177,6 @@ void proc_wakeup_waiters(int exited_pid) {
     }
 }
 
-/*
- * Reserved for future zombie resource reclamation.
- *
- * Note: this helper is intentionally not wired into SYS_WAIT yet.
- * The current kernel model supports wait-as-block/wakeup, but does
- * not yet model a true in-kernel suspended continuation that would
- * make wait+reap semantics clean at the current control-flow level.
- */
 void proc_reap(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
         return;
@@ -187,6 +186,8 @@ void proc_reap(int pid) {
     procs[pid].block_reason = PROC_BLOCK_NONE;
     procs[pid].waited_by = -1;
     procs[pid].wait_pid = -1;
+    procs[pid].wait_status_uaddr = 0;
+    procs[pid].waited_exit_code = 0;
     procs[pid].wakeup_tick = 0;
 }
 

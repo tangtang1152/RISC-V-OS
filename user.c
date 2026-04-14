@@ -51,13 +51,17 @@ USER_TEXT void user_main(void)
         sys_printstr(u0_copyout_fail);
     }
 
+    long code = -1;
+    long status = -1;
+
     sys_printstr(u0_wait);
-    long code = sys_wait(1);
+    code = sys_wait(1, &status);
     sys_printstr(u0_wait_ret);
-    sys_printhex((unsigned long)code);
+    sys_printhex((unsigned long)status);
     sys_printstr(u0_nl);
 
-    if (code == 42 &&
+    if (code == 0 &&
+        status == 42 &&
         sum == 84 &&
         magic == 'Z' &&
         user_copyout_value == 0x1122334455667788UL) {
@@ -103,7 +107,6 @@ USER_TEXT static inline long do_syscall0(long n) {
 
     return a0;
 }
-
 USER_TEXT static inline long do_syscall1(long n, long x) {
     register long a0 asm("a0") = x;
     register long a7 asm("a7") = n;
@@ -117,7 +120,6 @@ USER_TEXT static inline long do_syscall1(long n, long x) {
 
     return a0;
 }
-
 USER_TEXT static inline long do_syscall2(long n, long x, long y) {
     register long a0 asm("a0") = x;
     register long a1 asm("a1") = y;
@@ -165,8 +167,8 @@ USER_TEXT long sys_sleep(long tick_count) {
     return do_syscall1(SYS_SLEEP, tick_count);
 }
 
-USER_TEXT long sys_wait(long pid) {
-    return do_syscall1(SYS_WAIT, pid);
+USER_TEXT long sys_wait(long pid, long *status) {
+    return do_syscall2(SYS_WAIT, pid, (long)status);
 }
 
 USER_TEXT long sys_getpid(void) {

@@ -35,13 +35,20 @@ struct proc {
     struct trap_frame tf;
     char kstack[KSTACK_SIZE] __attribute__((aligned(16)));
     char ustack[USTACK_SIZE] __attribute__((aligned(16)));
+
     int state;
+    int block_reason;
+
     int pid;
+
     unsigned long wakeup_tick;
+
     int wait_pid;
     int waited_by;
-    int block_reason;
-    int exit_code;
+
+    int waited_exit_code; // 子进程退出时就把返回值给这个字段。waiter恢复时尽量少碰child
+    int exit_code; // 子进程在自己的退出结果
+    unsigned long wait_status_uaddr;
     pagetable_t user_pagetable;
 };
 

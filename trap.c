@@ -216,6 +216,7 @@ void trap_handler(struct trap_frame *tf) {
 
             case SYS_WAIT: {
                 int target_pid = (int)tf->a0;
+                unsigned long status_uaddr = tf->a1;
 
                 if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
                     tf->a0 = -1;
@@ -233,14 +234,28 @@ void trap_handler(struct trap_frame *tf) {
                     break;
                 }
 
+                if (status_uaddr == 0) {
+                    tf->a0 = -1;
+                    break;
+                }
+
                 procs[target_pid].waited_by = current->pid;
 
                 if (proc_is_zombie(target_pid)) {
-                    tf->a0 = procs[target_pid].exit_code;
+                    long status = procs[target_pid].exit_code;
+
+                    if (copyout((void *)status_uaddr, &status, sizeof(status)) < 0) {
+                        tf->a0 = -1;
+                        break;
+                    }
+
+                    proc_reap(target_pid);
+                    tf->a0 = 0;
                     break;
                 }
 
                 current->wait_pid = target_pid;
+                current->wait_status_uaddr = status_uaddr;
                 current->state = PROC_BLOCKED;
                 current->block_reason = PROC_BLOCK_WAIT;
                 need_schedule = 1;
@@ -290,6 +305,26 @@ void trap_handler(struct trap_frame *tf) {
 
         if (need_schedule) {
             schedule();
+
+            if (tf->a7 == SYS_WAIT &&
+                current->state == PROC_RUNNING &&
+                current->block_reason == PROC_BLOCK_NONE &&
+                current->wait_pid != -1 &&
+                current->wait_status_uaddr != 0) {
+                long status = current->waited_exit_code;
+                int child_pid = current->wait_pid;
+
+                if (copyout((void *)current->wait_status_uaddr, &status, sizeof(status)) < 0) {
+                    tf->a0 = -1;
+                } else {
+                    proc_reap(child_pid);
+                    tf->a0 = 0;
+                }
+
+                current->wait_pid = -1;
+                current->wait_status_uaddr = 0;
+                current->waited_exit_code = 0;
+            }
 
             if (tf->a7 == SYS_YIELD) {
                 print_str("[KERNEL] yield: pid=");
