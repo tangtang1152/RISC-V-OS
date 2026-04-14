@@ -223,11 +223,19 @@ void trap_handler(struct trap_frame *tf) {
                     break;
                 }
 
-                if (current->wait_pid != -1) {
+                /*
+                 * Allow restartable re-entry of the same wait syscall:
+                 * if wait_pid/status_uaddr already match this request,
+                 * treat it as the same in-flight wait instead of a new one.
+                 */
+
+                // 只有当wait_id不是-1且也不是二次进入 才报错
+                if (current->wait_pid != -1 &&
+                    (current->wait_pid != target_pid ||
+                    current->wait_status_uaddr != status_uaddr)) {
                     tf->a0 = -1;
                     break;
                 }
-
                 if (procs[target_pid].waited_by != -1 &&
                     procs[target_pid].waited_by != current->pid) {
                     tf->a0 = -1;
@@ -243,13 +251,18 @@ void trap_handler(struct trap_frame *tf) {
 
                 if (proc_is_zombie(target_pid)) {
                     long status = procs[target_pid].exit_code;
-
+                    
                     if (copyout((void *)status_uaddr, &status, sizeof(status)) < 0) {
+                        // clear in-flight wait state when SYS_WAIT copyout fails on zombie completion
+                        current->wait_pid = -1;
+                        current->wait_status_uaddr = 0;
                         tf->a0 = -1;
                         break;
                     }
 
                     proc_reap(target_pid);
+                    current->wait_pid = -1;
+                    current->wait_status_uaddr = 0;
                     tf->a0 = 0;
                     break;
                 }
@@ -258,6 +271,7 @@ void trap_handler(struct trap_frame *tf) {
                 current->wait_status_uaddr = status_uaddr;
                 current->state = PROC_BLOCKED;
                 current->block_reason = PROC_BLOCK_WAIT;
+                advance_sepc = 0;
                 need_schedule = 1;
                 break;
             }
@@ -305,26 +319,6 @@ void trap_handler(struct trap_frame *tf) {
 
         if (need_schedule) {
             schedule();
-
-            if (tf->a7 == SYS_WAIT &&
-                current->state == PROC_RUNNING &&
-                current->block_reason == PROC_BLOCK_NONE &&
-                current->wait_pid != -1 &&
-                current->wait_status_uaddr != 0) {
-                long status = current->waited_exit_code;
-                int child_pid = current->wait_pid;
-
-                if (copyout((void *)current->wait_status_uaddr, &status, sizeof(status)) < 0) {
-                    tf->a0 = -1;
-                } else {
-                    proc_reap(child_pid);
-                    tf->a0 = 0;
-                }
-
-                current->wait_pid = -1;
-                current->wait_status_uaddr = 0;
-                current->waited_exit_code = 0;
-            }
 
             if (tf->a7 == SYS_YIELD) {
                 print_str("[KERNEL] yield: pid=");

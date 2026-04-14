@@ -46,8 +46,7 @@ struct proc {
     int wait_pid;
     int waited_by;
 
-    int waited_exit_code; // 子进程退出时就把返回值给这个字段。waiter恢复时尽量少碰child
-    int exit_code; // 子进程在自己的退出结果
+    int exit_code;
     unsigned long wait_status_uaddr;
     pagetable_t user_pagetable;
 };

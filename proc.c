@@ -20,7 +20,6 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry_offse
     p->wait_pid = -1;
     p->waited_by = -1;
 
-    p->waited_exit_code = 0;
     p->exit_code = 0;
     p->wait_status_uaddr = 0;
 
@@ -168,8 +167,6 @@ void proc_wakeup_waiters(int exited_pid) {
     if (procs[waiter_pid].state == PROC_BLOCKED &&
         procs[waiter_pid].block_reason == PROC_BLOCK_WAIT &&
         procs[waiter_pid].wait_pid == exited_pid) {
-        // procs[waiter_pid].wait_pid = -1; 留到最后wait这件事完全结束再清
-        procs[waiter_pid].waited_exit_code = procs[exited_pid].exit_code;
         procs[waiter_pid].block_reason = PROC_BLOCK_NONE;
         procs[waiter_pid].state = PROC_RUNNABLE;
 
@@ -187,7 +184,6 @@ void proc_reap(int pid) {
     procs[pid].waited_by = -1;
     procs[pid].wait_pid = -1;
     procs[pid].wait_status_uaddr = 0;
-    procs[pid].waited_exit_code = 0;
     procs[pid].wakeup_tick = 0;
 }
 

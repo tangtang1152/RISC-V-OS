@@ -22,6 +22,7 @@ static const char u0_copyout[] USER_RODATA = " copyout=";
 static const char u0_copyout_fail[] USER_RODATA = "[USER0] copyout failed\n";
 
 //test
+static unsigned long u0_expected_copyout USER_DATA = 0x1122334455667788UL;
 static long user_data_value USER_DATA = 7;
 static long user_bss_value USER_BSS;
 
@@ -64,7 +65,7 @@ USER_TEXT void user_main(void)
         status == 42 &&
         sum == 84 &&
         magic == 'Z' &&
-        user_copyout_value == 0x1122334455667788UL) {
+        user_copyout_value == u0_expected_copyout) {
         sys_printstr(u0_pass);
     } else {
         sys_printstr(u0_fail);
