@@ -15,27 +15,6 @@ extern char __userdata_end[];
 extern char __userbss_start[];
 extern char __userbss_end[];
 
-typedef struct {
-    unsigned long image_copy_size;   // text + rodata + data
-    unsigned long image_map_size;    // text + rodata + data + bss (page aligned)
-
-    unsigned long text_start;
-    unsigned long text_end;
-
-    unsigned long rodata_start;
-    unsigned long rodata_end;
-
-    unsigned long data_start;
-    unsigned long data_end;
-
-    unsigned long bss_start;
-    unsigned long bss_end;
-
-    unsigned long stack_bottom;
-    unsigned long stack_top;
-} user_layout_t;
-
-
 #define USER_PT_PAGE_COUNT (5 + KERNEL_L0_TABLES)
 
 static pte_t user_pts[PROC_NUM][USER_PT_PAGE_COUNT][PT_ENTRY_COUNT]
@@ -113,48 +92,6 @@ void vm_init(void) {
     print_str("vm scaffold init done\n");
 }
 
-static user_layout_t vm_user_layout(void) {
-    user_layout_t l;
-
-    l.text_start   = USER_TEXT_BASE;
-    l.text_end     = USER_TEXT_BASE + (unsigned long)(__usertext_end - __usertext_start);
-
-    l.rodata_start = USER_TEXT_BASE + (unsigned long)(__userrodata_start - __usertext_start);
-    l.rodata_end   = USER_TEXT_BASE + (unsigned long)(__userrodata_end - __usertext_start);
-
-    l.data_start   = USER_TEXT_BASE + (unsigned long)(__userdata_start - __usertext_start);
-    l.data_end     = USER_TEXT_BASE + (unsigned long)(__userdata_end - __usertext_start);
-
-    l.bss_start    = USER_TEXT_BASE + (unsigned long)(__userbss_start - __usertext_start);
-    l.bss_end      = USER_TEXT_BASE + (unsigned long)(__userbss_end - __usertext_start);
-
-    l.image_copy_size = (unsigned long)(__userdata_end - __usertext_start);
-    l.image_map_size  = page_up((unsigned long)(__userbss_end - __usertext_start));
-
-    l.stack_top    = USER_STACK_TOP;
-    l.stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
-
-    return l;
-}
-
-static int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long end) {
-    return va >= start && va < end;
-}
-
-static unsigned long vm_user_image_perm(const user_layout_t *layout, unsigned long va) {
-    if (vm_user_range_contains(va, layout->text_start, layout->rodata_start)) {
-        return PTE_R | PTE_X | PTE_U;
-    }
-    if (vm_user_range_contains(va, layout->rodata_start, layout->data_start)) {
-        return PTE_R | PTE_U;
-    }
-    if (vm_user_range_contains(va, layout->data_start, layout->bss_end)) {
-        return PTE_R | PTE_W | PTE_U;
-    }
-
-    return 0;
-}
-
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm) {
     pte_t *l2 = (pte_t *)pt;
     pte_t *l1;
@@ -219,13 +156,14 @@ pagetable_t vm_make_user_pagetable(int pid) {
         user_image_pages[pid][i] = 0;
     }
 
-    user_layout_t layout = vm_user_layout();
+    user_layout_t layout;
+    vm_user_layout_init(&layout);
 
     l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
     l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
     l1_low[vpn1(layout.stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
 
-    if (layout.image_map_size > USER_IMAGE_MAX_SIZE) {
+    if (layout.full_image_size > USER_IMAGE_MAX_SIZE) {
         print_str("[KERNEL] user image too large\n");
         return 0;
     }
@@ -234,12 +172,19 @@ pagetable_t vm_make_user_pagetable(int pid) {
         user_image_pages[pid][i] = __usertext_start[i];
     }
 
-    for (unsigned long off = 0; off < layout.image_map_size; off += PAGE_SIZE) {
+    /*
+     * Phase-1 split:
+     *   eager map  = text / rodata / data
+     *   lazy map   = bss .. demand_end
+     *
+     * So here we only pre-map the eager portion.
+     */
+    for (unsigned long off = 0; off < layout.eager_map_size; off += PAGE_SIZE) {
         unsigned long va = USER_TEXT_BASE + off;
         unsigned long perm = vm_user_image_perm(&layout, va);
 
         if (perm == 0) {
-            print_str("[KERNEL] unexpected user image va perm lookup miss\n");
+            print_str("[KERNEL] unexpected eager user image va perm lookup miss\n");
             return 0;
         }
 
@@ -271,3 +216,58 @@ pagetable_t vm_make_user_pagetable(int pid) {
 
     return (pagetable_t)l2;
 }
+
+void vm_user_layout_init(user_layout_t *l) {
+    if (!l) {
+        return;
+    }
+
+    l->text_start   = USER_TEXT_BASE;
+    l->text_end     = USER_TEXT_BASE + (unsigned long)(__usertext_end - __usertext_start);
+
+    l->rodata_start = USER_TEXT_BASE + (unsigned long)(__userrodata_start - __usertext_start);
+    l->rodata_end   = USER_TEXT_BASE + (unsigned long)(__userrodata_end - __usertext_start);
+
+    l->data_start   = USER_TEXT_BASE + (unsigned long)(__userdata_start - __usertext_start);
+    l->data_end     = USER_TEXT_BASE + (unsigned long)(__userdata_end - __usertext_start);
+
+    l->bss_start    = USER_TEXT_BASE + (unsigned long)(__userbss_start - __usertext_start);
+    l->bss_end      = USER_TEXT_BASE + (unsigned long)(__userbss_end - __usertext_start);
+
+    l->image_copy_size = (unsigned long)(__userdata_end - __usertext_start);
+    l->eager_map_size  = page_up((unsigned long)(__userdata_end - __usertext_start));
+    l->full_image_size = page_up((unsigned long)(__userbss_end - __usertext_start));
+
+    /*
+    * Phase-1 demand paging policy:
+    *   eager  = text / rodata / data
+    *   lazy   = bss .. USER_TEXT_BASE + USER_IMAGE_MAX_SIZE
+    */
+    l->demand_start = l->bss_start;
+    l->demand_end   = USER_TEXT_BASE + USER_IMAGE_MAX_SIZE;
+
+    l->stack_top    = USER_STACK_TOP;
+    l->stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
+}
+
+int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long end) {
+    return va >= start && va < end;
+}
+int vm_user_is_demand_range(const user_layout_t *layout, unsigned long va) {
+    return vm_user_range_contains(va, layout->demand_start, layout->demand_end);
+}
+
+unsigned long vm_user_image_perm(const user_layout_t *layout, unsigned long va) {
+    if (vm_user_range_contains(va, layout->text_start, layout->rodata_start)) {
+        return PTE_R | PTE_X | PTE_U;
+    }
+    if (vm_user_range_contains(va, layout->rodata_start, layout->data_start)) {
+        return PTE_R | PTE_U;
+    }
+    if (vm_user_range_contains(va, layout->data_start, layout->bss_end)) {
+        return PTE_R | PTE_W | PTE_U;
+    }
+
+    return 0;
+}
+

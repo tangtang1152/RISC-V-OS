@@ -17,10 +17,39 @@
 typedef unsigned long pte_t;
 typedef unsigned long pagetable_t;
 
+typedef struct {
+    unsigned long image_copy_size;    /* text + rodata + data */
+    unsigned long eager_map_size;     /* eager mapped: text + rodata + data */
+    unsigned long full_image_size;    /* full image span: text + rodata + data + bss */
+
+    unsigned long text_start;
+    unsigned long text_end;
+
+    unsigned long rodata_start;
+    unsigned long rodata_end;
+
+    unsigned long data_start;
+    unsigned long data_end;
+
+    unsigned long bss_start;
+    unsigned long bss_end;
+
+    unsigned long demand_start;       /* phase-1 lazy region start */
+    unsigned long demand_end;         /* phase-1 lazy region end */
+
+    unsigned long stack_bottom;
+    unsigned long stack_top;
+} user_layout_t;
+
 void vm_init(void);
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm);
 pagetable_t vm_make_user_pagetable(int pid);
 unsigned long vm_make_satp(pagetable_t pt);
 void vm_switch_to_user(pagetable_t pt);
+
+void vm_user_layout_init(user_layout_t *layout);
+int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long end);
+unsigned long vm_user_image_perm(const user_layout_t *layout, unsigned long va);
+int vm_user_is_demand_range(const user_layout_t *layout, unsigned long va);
 
 #endif
