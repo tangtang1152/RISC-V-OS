@@ -1,6 +1,6 @@
 # Project Files Export
 
-Export time: 4/10/2026, 2:39:02 AM
+Export time: 4/14/2026, 5:48:51 PM
 
 Source directory: `riscv`
 
@@ -28,6 +28,8 @@ riscv
 ├── trap.c
 ├── trap.h
 ├── trap.S
+├── uaccess.c
+├── uaccess.h
 ├── user.c
 ├── vm.c
 └── vm.h
@@ -35,18 +37,18 @@ riscv
 
 ## File Statistics
 
-- Total files: 20
-- Total size: 36.5 KB
+- Total files: 22
+- Total size: 47.8 KB
 
 ### File Type Distribution
 
 | Extension | Files | Total Size |
 | --- | --- | --- |
-| .h | 8 | 6.7 KB |
-| .c | 7 | 22.2 KB |
-| (no extension) | 2 | 803 bytes |
-| .s | 2 | 6.0 KB |
-| .ld | 1 | 831 bytes |
+| .h | 9 | 7.2 KB |
+| .c | 8 | 32.1 KB |
+| (no extension) | 2 | 833 bytes |
+| .s | 2 | 6.5 KB |
+| .ld | 1 | 1.3 KB |
 
 ## File Contents
 
@@ -128,6 +130,8 @@ SECTIONS
     }
 
     . = ALIGN(4096);
+    __userimage_start = .;
+
     __usertext_start = .;
     .usertext : {
         *(.usertext)
@@ -135,7 +139,33 @@ SECTIONS
     }
     . = ALIGN(4096);
     __usertext_end = .;
-    
+
+    __userrodata_start = .;
+    .userrodata : {
+        *(.userrodata)
+        *(.userrodata.*)
+    }
+    . = ALIGN(4096);
+    __userrodata_end = .;
+
+    __userdata_start = .;
+    .userdata : {
+        *(.userdata)
+        *(.userdata.*)
+    }
+    . = ALIGN(4096);
+    __userdata_end = .;
+
+    __userbss_start = .;
+    .userbss : {
+        *(.userbss)
+        *(.userbss.*)
+    }
+    . = ALIGN(4096);
+    __userbss_end = .;
+
+    __userimage_end = .;
+
     .rodata : {
         *(.rodata .rodata.*)
     }
@@ -166,8 +196,8 @@ LDFLAGS = -T linker.ld -nostdlib
 
 all: kernel.bin
 
-kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c proc.c proc.h timer.h timer.c vm.h vm.c memlayout.h
-	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c proc.c timer.c vm.c $(LDFLAGS) -o kernel.elf
+kernel.elf: start.S kmain.c sbi.c sbi.h linker.ld trap.S trap.c riscv.h syscall.h user.c proc.c proc.h timer.h timer.c vm.h vm.c memlayout.h uaccess.c uaccess.h
+	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c proc.c timer.c vm.c uaccess.c $(LDFLAGS) -o kernel.elf
 
 kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary kernel.elf kernel.bin
@@ -194,6 +224,8 @@ clean:
  * Intended future user virtual address layout.
  */
 #define USER_BASE             0x0000000000001000UL
+#define USER_TEXT_BASE        USER_BASE
+#define USER_IMAGE_MAX_SIZE   0x0000000000040000UL   /* 256 KiB */
 #define USER_STACK_TOP        0x0000000040000000UL
 #define USER_STACK_SIZE       0x0000000000001000UL
 
@@ -228,18 +260,24 @@ clean:
 
 extern void user_entry(void);
 extern void user_entry2(void);
+extern char __usertext_start[];
 
 struct proc procs[PROC_NUM];
 struct proc *current = 0;
 
-static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
+static void init_proc_context(struct proc *p, int pid, unsigned long entry_offset) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
+    p->block_reason = PROC_BLOCK_NONE;   
+
     p->wakeup_tick = 0;
+
     p->wait_pid = -1;
     p->waited_by = -1;
-    p->block_reason = PROC_BLOCK_NONE;
+
     p->exit_code = 0;
+    p->wait_status_uaddr = 0;
+
     p->user_pagetable = vm_make_user_pagetable(pid);
 
     p->scratch.user_t0 = 0;
@@ -291,16 +329,17 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry) {
     p->tf.t5 = 0;
     p->tf.t6 = 0;
 
-    p->tf.sepc = entry;
+    p->tf.sepc = USER_TEXT_BASE + entry_offset;
 }
 
 void proc_init(void) {
-    init_proc_context(&procs[0], 0, (unsigned long)user_entry);
-    init_proc_context(&procs[1], 1, (unsigned long)user_entry2);
+    init_proc_context(&procs[0], 0, (unsigned long)user_entry - (unsigned long)__usertext_start);
+    init_proc_context(&procs[1], 1, (unsigned long)user_entry2 - (unsigned long)__usertext_start);
 
     current = &procs[0];
     current->state = PROC_RUNNING;
 }
+
 int proc_switch(void) {
     int start = current ? current->pid : 0;
 
@@ -383,8 +422,6 @@ void proc_wakeup_waiters(int exited_pid) {
     if (procs[waiter_pid].state == PROC_BLOCKED &&
         procs[waiter_pid].block_reason == PROC_BLOCK_WAIT &&
         procs[waiter_pid].wait_pid == exited_pid) {
-        procs[waiter_pid].wait_pid = -1;
-        procs[waiter_pid].tf.a0 = procs[exited_pid].exit_code;
         procs[waiter_pid].block_reason = PROC_BLOCK_NONE;
         procs[waiter_pid].state = PROC_RUNNABLE;
 
@@ -392,14 +429,6 @@ void proc_wakeup_waiters(int exited_pid) {
     }
 }
 
-/*
- * Reserved for future zombie resource reclamation.
- *
- * Note: this helper is intentionally not wired into SYS_WAIT yet.
- * The current kernel model supports wait-as-block/wakeup, but does
- * not yet model a true in-kernel suspended continuation that would
- * make wait+reap semantics clean at the current control-flow level.
- */
 void proc_reap(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
         return;
@@ -409,6 +438,7 @@ void proc_reap(int pid) {
     procs[pid].block_reason = PROC_BLOCK_NONE;
     procs[pid].waited_by = -1;
     procs[pid].wait_pid = -1;
+    procs[pid].wait_status_uaddr = 0;
     procs[pid].wakeup_tick = 0;
 }
 
@@ -493,13 +523,19 @@ struct proc {
     struct trap_frame tf;
     char kstack[KSTACK_SIZE] __attribute__((aligned(16)));
     char ustack[USTACK_SIZE] __attribute__((aligned(16)));
+
     int state;
+    int block_reason;
+
     int pid;
+
     unsigned long wakeup_tick;
+
     int wait_pid;
     int waited_by;
-    int block_reason;
+
     int exit_code;
+    unsigned long wait_status_uaddr;
     pagetable_t user_pagetable;
 };
 
@@ -734,6 +770,7 @@ stack_top:
 #define SYS_SLEEP     8
 #define SYS_GETPID    9
 #define SYS_WAIT      10
+#define SYS_FILLBUF   11
 
 long sys_putchar(char ch);
 long sys_printstr(const char *s);
@@ -743,8 +780,9 @@ long sys_exit(long code);
 long sys_printhex(unsigned long x);
 long sys_yield(void);
 long sys_sleep(long tick_count);
-long sys_wait(long pid);
+long sys_wait(long pid, long *status);
 long sys_getpid(void);
+long sys_fillbuf(unsigned long *buf);
 
 #endif
 ```
@@ -812,15 +850,104 @@ void timer_tick(void);
 #include "trap.h"
 #include "proc.h"
 #include "timer.h"
+#include "uaccess.h"
 
 #define SCAUSE_INTERRUPT (1UL << 63)
 #define SCAUSE_CODE(x)   ((x) & 0xfff)
+
+#define SCAUSE_ECALL_U           8
+#define SCAUSE_INST_PAGE_FAULT   12
+#define SCAUSE_LOAD_PAGE_FAULT   13
+#define SCAUSE_STORE_PAGE_FAULT  15
+
+#define USER_STR_MAX 256
 
 static int proc_is_zombie(int pid) {
     if (pid < 0 || pid >= PROC_NUM) {
         return 0;
     }
     return procs[pid].state == PROC_ZOMBIE;
+}
+
+static int is_user_fault(void) {
+    return (r_sstatus() & (1UL << 8)) == 0; //SPP
+}
+static int is_page_fault(unsigned long scause) {
+    return scause == SCAUSE_INST_PAGE_FAULT ||
+           scause == SCAUSE_LOAD_PAGE_FAULT ||
+           scause == SCAUSE_STORE_PAGE_FAULT;
+}
+static const char *page_fault_name(unsigned long scause) {
+    switch (scause) {
+        case SCAUSE_INST_PAGE_FAULT:
+            return "instruction page fault";
+        case SCAUSE_LOAD_PAGE_FAULT:
+            return "load page fault";
+        case SCAUSE_STORE_PAGE_FAULT:
+            return "store page fault";
+        default:
+            return "unknown page fault";
+    }
+}
+
+static void panic_trap(const char *prefix, unsigned long scause) {
+    print_str(prefix);
+    print_hex(scause);
+    print_str(", sepc=");
+    print_hex(r_sepc());
+    print_str(", stval=");
+    print_hex(r_stval());
+    print_str(", current pid=");
+    if (current) {
+        print_hex((unsigned long)current->pid);
+    } else {
+        print_str("none");
+    }
+    print_str("\n");
+
+    proc_dump();
+
+    while (1) {}
+}
+static void kill_current_user_fault(struct trap_frame *tf, unsigned long scause) {
+    int old_pid = current ? current->pid : -1;
+
+    print_str("[KERNEL] user ");
+    print_str(page_fault_name(scause));
+    print_str(": pid=");
+    if (current) {
+        print_hex((unsigned long)current->pid);
+    } else {
+        print_str("none");
+    }
+    print_str(", scause=");
+    print_hex(scause);
+    print_str(", sepc=");
+    print_hex(r_sepc());
+    print_str(", stval=");
+    print_hex(r_stval());
+    print_str("\n");
+
+    if (!current) {
+        print_str("[KERNEL] no current process on user page fault\n");
+        while (1) {}
+    }
+
+    current->exit_code = -1;
+    current->state = PROC_ZOMBIE;
+    current->block_reason = PROC_BLOCK_NONE;
+    current->wait_pid = -1;
+    proc_wakeup_waiters(current->pid);
+
+    schedule();
+
+    print_str("[KERNEL] page fault switch: pid=");
+    print_hex((unsigned long)old_pid);
+    print_str(" -> pid=");
+    print_hex((unsigned long)current->pid);
+    print_str("\n");
+
+    vm_switch_to_user(current->user_pagetable);
 }
 
 void trap_handler(struct trap_frame *tf) {
@@ -850,14 +977,19 @@ void trap_handler(struct trap_frame *tf) {
             return;
         }
 
-        print_str("[KERNEL] unhandled time interrupt, scause=");
-        print_hex(scause);
-        print_str("\n");
-        proc_dump();
-        while (1) {}
+        panic_trap("[KERNEL] unhandled timer interrupt, scause=", scause);
     }
 
-    if (scause == 8) {   // Environment call from U-mode
+    if (is_page_fault(scause)) {
+        if (is_user_fault()) {
+            kill_current_user_fault(tf, scause);
+            return;
+        }
+
+        panic_trap("[KERNEL] supervisor page fault, scause=", scause);
+    }
+
+    if (scause == SCAUSE_ECALL_U) {   // Environment call from U-mode
         int advance_sepc = 1;
         int need_schedule = 0;
         int old_pid = -1;
@@ -868,10 +1000,18 @@ void trap_handler(struct trap_frame *tf) {
                 tf->a0 = 0;
                 break;
             
-            case SYS_PRINTSTR:
-                print_str((const char *)tf->a0);
+            case SYS_PRINTSTR: {
+                char buf[USER_STR_MAX];
+
+                if (copyinstr((const char *)tf->a0, buf, sizeof(buf)) < 0) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                print_str(buf);
                 tf->a0 = 0;
                 break;
+            }
 
             case SYS_PRINTHEX:
                 print_hex(tf->a0);
@@ -922,19 +1062,33 @@ void trap_handler(struct trap_frame *tf) {
 
             case SYS_WAIT: {
                 int target_pid = (int)tf->a0;
+                unsigned long status_uaddr = tf->a1;
 
                 if (target_pid < 0 || target_pid >= PROC_NUM || target_pid == current->pid) {
                     tf->a0 = -1;
                     break;
                 }
 
-                if (current->wait_pid != -1) {
+                /*
+                 * Allow restartable re-entry of the same wait syscall:
+                 * if wait_pid/status_uaddr already match this request,
+                 * treat it as the same in-flight wait instead of a new one.
+                 */
+
+                // 只有当wait_id不是-1且也不是二次进入 才报错
+                if (current->wait_pid != -1 &&
+                    (current->wait_pid != target_pid ||
+                    current->wait_status_uaddr != status_uaddr)) {
+                    tf->a0 = -1;
+                    break;
+                }
+                if (procs[target_pid].waited_by != -1 &&
+                    procs[target_pid].waited_by != current->pid) {
                     tf->a0 = -1;
                     break;
                 }
 
-                if (procs[target_pid].waited_by != -1 &&
-                    procs[target_pid].waited_by != current->pid) {
+                if (status_uaddr == 0) {
                     tf->a0 = -1;
                     break;
                 }
@@ -942,13 +1096,28 @@ void trap_handler(struct trap_frame *tf) {
                 procs[target_pid].waited_by = current->pid;
 
                 if (proc_is_zombie(target_pid)) {
-                    tf->a0 = procs[target_pid].exit_code;
+                    long status = procs[target_pid].exit_code;
+                    
+                    if (copyout((void *)status_uaddr, &status, sizeof(status)) < 0) {
+                        // clear in-flight wait state when SYS_WAIT copyout fails on zombie completion
+                        current->wait_pid = -1;
+                        current->wait_status_uaddr = 0;
+                        tf->a0 = -1;
+                        break;
+                    }
+
+                    proc_reap(target_pid);
+                    current->wait_pid = -1;
+                    current->wait_status_uaddr = 0;
+                    tf->a0 = 0;
                     break;
                 }
 
                 current->wait_pid = target_pid;
+                current->wait_status_uaddr = status_uaddr;
                 current->state = PROC_BLOCKED;
                 current->block_reason = PROC_BLOCK_WAIT;
+                advance_sepc = 0;
                 need_schedule = 1;
                 break;
             }
@@ -968,6 +1137,18 @@ void trap_handler(struct trap_frame *tf) {
                 break;
             }
 
+            case SYS_FILLBUF: {
+                unsigned long value = 0x1122334455667788UL;
+
+                if (copyout((void *)tf->a0, &value, sizeof(value)) < 0) {
+                    tf->a0 = -1;
+                    break;
+                }
+
+                tf->a0 = 0;
+                break;
+            }
+            
             default:
                 print_str("[KERNEL] unknown syscall, a7=");
                 print_hex(tf->a7);
@@ -1004,23 +1185,7 @@ void trap_handler(struct trap_frame *tf) {
         return;
     }
 
-    print_str("[KERNEL] unhandled trap, scause=");
-    print_hex(scause);
-    print_str(", sepc=");
-    print_hex(r_sepc());
-    print_str(", stval=");
-    print_hex(r_stval());
-    print_str(", current pid=");
-    if (current) {
-        print_hex((unsigned long)current->pid);
-    } else {
-        print_str("none");
-    }
-    print_str("\n");
-
-    proc_dump();
-
-    while (1) {}
+    panic_trap("[KERNEL] unhandled trap, scause=", scause);
 }
 ```
 
@@ -1082,47 +1247,47 @@ struct trap_frame {
 
 .section .text
 .globl kernel_entry
+.globl user_trap_entry
 .globl user_entry
 .globl user_entry2
 .global user_return
 .global kernel_return
 
 .balign 4
-kernel_entry:
-    # swap:
-    #   t0 <- old sscratch
-    #   sscratch <- old t0
+user_trap_entry:
+    # Trap came from U-mode.
     #
-    # Current convention:
-    #   - for U-traps, sscratch holds &current->scratch
-    #   - for current temporary S-trap handling, schedule()->wfi also primes
-    #     sscratch with &current->scratch before idle wait
+    # sscratch convention while user is running: sscratch里面尽量一直放&current->scratch
+    #   sscratch = &current->scratch
+    #
+    # After csrrw:
+    #   t0 = &current->scratch
+    #   sscratch = user t0
     csrrw t0, sscratch, t0
 
-    # save original t1/t2 early into scratch
+    # Save user temporaries that would otherwise be clobbered early.
     sd t1, 0(t0)              # scratch.user_t1
     sd t2, 8(t0)              # scratch.user_t2
 
-    # distinguish trap source by SPP
-    #   SPP=0 -> trap came from U-mode
-    #   SPP=1 -> trap came from S-mode
-    csrr t1, sstatus
-    andi t1, t1, 0x100
-    bnez t1, kernel_trap_entry
-
-user_trap_entry:
-    # original user t0 is now in sscratch
+    # Save original user t0, then restore sscratch ASAP so nested S-traps
+    # will still see a valid scratch pointer if they ever need it later.
     csrr t1, sscratch
     sd t1, 16(t0)             # scratch.user_t0
+    csrw sscratch, t0
 
+    # Save user sp into scratch before switching stacks.
     sd sp, 24(t0)             # scratch.user_sp
 
-    # load pointers prepared in proc_init()
+    # Load trapframe pointer and kernel stack top prepared by proc_init().
     ld t1, 32(t0)             # scratch.tf_ptr
     ld sp, 40(t0)             # scratch.kstack_top
 
-    # t1 = trap_frame *
-    # t0 = scratch *
+    # We are now running in kernel context on kernel stack.
+    # Any nested trap from here on must go directly to kernel_entry.
+    la t2, kernel_entry
+    csrw stvec, t2
+
+    # Save user register context into trapframe.
     sd ra, 0(t1)
 
     ld t2, 24(t0)
@@ -1174,31 +1339,27 @@ user_trap_entry:
     call trap_handler
     j user_return
 
+
 .balign 4
-kernel_trap_entry:
-    # We arrived here from S-mode.
-    # Use a temporary trap_frame on the current kernel stack.
+kernel_entry:
+    # Trap came from S-mode.
+    #
+    # Do NOT depend on sscratch or user-trap conventions here.
+    # Just build a temporary trapframe directly on the current kernel stack.
     addi sp, sp, -256
 
     sd ra, 0(sp)
 
-    # interrupted kernel sp = current sp + 256
-    addi t1, sp, 256
-    sd t1, 8(sp)
+    # Save interrupted kernel sp = current sp + 256
+    addi t0, sp, 256
+    sd t0, 8(sp)
 
     sd gp, 16(sp)
     sd tp, 24(sp)
 
-    # original kernel t0 was swapped into sscratch at entry
-    csrr t1, sscratch
-    sd t1, 32(sp)
-
-    # original kernel t1/t2 were saved into scratch at entry
-    ld t1, 0(t0)
+    sd t0, 32(sp)
     sd t1, 40(sp)
-
-    ld t1, 8(t0)
-    sd t1, 48(sp)
+    sd t2, 48(sp)
 
     sd s0, 56(sp)
     sd s1, 64(sp)
@@ -1227,23 +1388,32 @@ kernel_trap_entry:
     sd t5, 232(sp)
     sd t6, 240(sp)
 
-    csrr t1, sepc
-    sd t1, 248(sp)
+    csrr t0, sepc
+    sd t0, 248(sp)
 
+    # 把这块临时 trapframe 的地址传给 trap_handler
+    # S-trap 不再关心 current->scratch，也不关心 sscratch 里有什么。
     mv a0, sp
     call trap_handler
+
     j kernel_return
+
 
 .balign 4
 user_return:
-    # after handler, reload current scratch/tf because current may have changed
+    # trap_handler may have switched current, so reload everything from current.
     la t0, current
     ld t0, 0(t0)              # t0 = current
-    addi t0, t0, 0            # t0 = &current->scratch
-    addi t1, t0, 48           # t1 = &current->tf
+    addi t1, t0, 48           # t1 = &current->tf   (scratch is first field)
 
-    # while back in user mode, sscratch must point to current scratch
+    # While user runs:
+    #   sscratch = &current->scratch
     csrw sscratch, t0
+
+    # While user runs:
+    #   traps must enter through user_trap_entry
+    la t2, user_trap_entry
+    csrw stvec, t2
 
     ld ra, 0(t1)
 
@@ -1283,24 +1453,31 @@ user_return:
     ld t2, 8(t1)
     mv sp, t2                 # restore user sp
 
-    # restore user t0/t1/t2 last
+    # Restore user t0/t1/t2 last.
     ld t0, 32(t1)
     ld t2, 48(t1)
     ld t1, 40(t1)
 
     sret
 
+
 .balign 4
 kernel_return:
-    # restore interrupted kernel context from temporary trap_frame on current sp
+    # Restore interrupted kernel context from temporary stack trapframe.
 
-    ld t1, 248(sp)
-    csrw sepc, t1
+    ld t0, 248(sp)
+    csrw sepc, t0
 
-    # restore sscratch to &current->scratch for future U-traps / idle traps
+    # Keep sscratch pointing at current->scratch for the next user trap.
+    # 虽然当前是从 S-trap 返回 S-mode，但你之后迟早还会回到用户态。
     la t3, current
-    ld t3, 0(t3)              # current, and scratch is first field
+    ld t3, 0(t3)
     csrw sscratch, t3
+
+    # While staying in kernel:
+    #   traps must enter through kernel_entry
+    la t4, kernel_entry
+    csrw stvec, t4
 
     ld ra, 0(sp)
     ld gp, 16(sp)
@@ -1333,13 +1510,14 @@ kernel_return:
     ld t5, 232(sp)
     ld t6, 240(sp)
 
-    # restore t0/t1/t2 last
+    # Restore t0/t1/t2 last.
     ld t2, 48(sp)
     ld t1, 40(sp)
     ld t0, 32(sp)
 
     addi sp, sp, 256
     sret
+
 
 .section .usertext
 .balign 4096
@@ -1358,12 +1536,170 @@ user_entry2:
     j 2b
 ```
 
+### uaccess.c
+
+```c
+// uaccess.c
+#include "uaccess.h"
+#include "riscv.h"
+#include "memlayout.h"
+
+#define SSTATUS_SUM (1UL << 18)
+
+static int range_in_segment(unsigned long addr, unsigned long len, unsigned long start, unsigned long end) {
+    unsigned long last;
+
+    if (len == 0) {
+        return 1;
+    }
+
+    if (addr < start || addr >= end) {
+        return 0;
+    }
+
+    last = addr + len - 1;
+    if (last < addr) {
+        return 0;
+    }
+
+    return last < end;
+}
+
+static int user_range_ok(const void *uaddr, unsigned long len) {
+    unsigned long addr = (unsigned long)uaddr;
+    unsigned long user_img_start = USER_TEXT_BASE;
+    unsigned long user_img_end = USER_TEXT_BASE + USER_IMAGE_MAX_SIZE;
+    unsigned long user_stack_start = USER_STACK_TOP - USER_STACK_SIZE;
+    unsigned long user_stack_end = USER_STACK_TOP;
+
+    return range_in_segment(addr, len, user_img_start, user_img_end) ||
+           range_in_segment(addr, len, user_stack_start, user_stack_end);
+}
+
+int copyin(const void *uaddr, void *kaddr, unsigned long len) {
+    const unsigned char *src = (const unsigned char *)uaddr;
+    unsigned char *dst = (unsigned char *)kaddr;
+    unsigned long sstatus;
+
+    if ((!uaddr && len != 0) || (!kaddr && len != 0)) {
+        return -1;
+    }
+    if (!user_range_ok(uaddr, len)) {
+        return -1;
+    }
+
+    sstatus = r_sstatus();
+    w_sstatus(sstatus | SSTATUS_SUM);
+
+    for (unsigned long i = 0; i < len; i++) {
+        dst[i] = src[i];
+    }
+
+    w_sstatus(sstatus);
+    return 0;
+}
+
+int copyout(void *uaddr, const void *kaddr, unsigned long len) {
+    unsigned char *dst = (unsigned char *)uaddr;
+    const unsigned char *src = (const unsigned char *)kaddr;
+    unsigned long sstatus;
+
+    if ((!uaddr && len != 0) || (!kaddr && len != 0)) {
+        return -1;
+    }
+    if (!user_range_ok(uaddr, len)) {
+        return -1;
+    }
+
+    sstatus = r_sstatus();
+    w_sstatus(sstatus | SSTATUS_SUM);
+
+    for (unsigned long i = 0; i < len; i++) {
+        dst[i] = src[i];
+    }
+
+    w_sstatus(sstatus);
+    return 0;
+}
+
+int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen) {
+    unsigned long sstatus;
+
+    if (!uaddr || !kbuf || maxlen == 0) {
+        return -1;
+    }
+
+    sstatus = r_sstatus();
+    w_sstatus(sstatus | SSTATUS_SUM);
+
+    for (unsigned long i = 0; i < maxlen; i++) {
+        if (!user_range_ok(uaddr + i, 1)) {
+            w_sstatus(sstatus);
+            return -1;
+        }
+
+        char ch = uaddr[i];
+        kbuf[i] = ch;
+        if (ch == '\0') {
+            w_sstatus(sstatus);
+            return 0;
+        }
+    }
+
+    w_sstatus(sstatus);
+    kbuf[maxlen - 1] = '\0';
+    return -1;
+}
+
+```
+
+### uaccess.h
+
+```plaintext
+// uaccess.h
+#ifndef UACCESS_H
+#define UACCESS_H
+
+int copyin(const void *uaddr, void *kaddr, unsigned long len);
+int copyout(void *uaddr, const void *kaddr, unsigned long len);
+int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen);
+
+#endif
+```
+
 ### user.c
 
 ```c
 // user.c
-#define USER_TEXT __attribute__((section(".usertext")))
+#define USER_TEXT    __attribute__((section(".usertext")))
+#define USER_RODATA  __attribute__((section(".userrodata")))
+#define USER_DATA    __attribute__((section(".userdata")))
+#define USER_BSS     __attribute__((section(".userbss")))
 #include "syscall.h"
+
+static const char u0_pid[] USER_RODATA = "[USER0] pid=";
+static const char u0_magic[] USER_RODATA = " magic=";
+static const char u0_add[] USER_RODATA = " add(20,22) + user_data_value + user_bss_value =";
+static const char u0_nl[] USER_RODATA = "\n";
+static const char u0_wait[] USER_RODATA = "[USER0] wait pid=1\n";
+static const char u0_wait_ret[] USER_RODATA = "[USER0] wait returned, exit code=";
+static const char u0_pass[] USER_RODATA = "[USER0] TEST PASS\n";
+static const char u0_fail[] USER_RODATA = "[USER0] TEST FAIL\n";
+
+static const char u1_pid[] USER_RODATA = "[USER1] pid=";
+static const char u1_add[] USER_RODATA = " add(10,32)=";
+static const char u1_sleep[] USER_RODATA = "[USER1] sleep 3 ticks\n";
+static const char u1_exit[] USER_RODATA = "[USER1] exit now\n";
+
+static const char u0_copyout[] USER_RODATA = " copyout=";
+static const char u0_copyout_fail[] USER_RODATA = "[USER0] copyout failed\n";
+
+//test
+static unsigned long u0_expected_copyout USER_DATA = 0x1122334455667788UL;
+static long user_data_value USER_DATA = 7;
+static long user_bss_value USER_BSS;
+
+static unsigned long user_copyout_value USER_BSS;
 
 USER_TEXT void user_main(void)
 {
@@ -1371,46 +1707,62 @@ USER_TEXT void user_main(void)
     long magic = sys_get_magic();
     long sum = sys_add(20, 22);
 
-    sys_printstr("[USER0] pid=");
-    sys_printhex((unsigned long)pid);
-    sys_printstr(" magic=");
-    sys_printhex((unsigned long)magic);
-    sys_printstr(" add(20,22)=");
-    sys_printhex((unsigned long)sum);
-    sys_printstr("\n");
+    user_bss_value += 35;
+    sum = sys_add(sum, user_data_value);
+    sum = sys_add(sum, user_bss_value);
 
-    sys_printstr("[USER0] wait pid=1\n");
-    long code = sys_wait(1);
-    sys_printstr("[USER0] wait returned, exit code=");
-    sys_printhex((unsigned long)code);
-    sys_printstr("\n");
-
-    if (code == 42 && sum == 42 && magic == 'Z') {
-        sys_printstr("[USER0] TEST PASS\n");
+    if (sys_fillbuf(&user_copyout_value) == 0) {
+        sys_printstr(u0_pid);
+        sys_printhex((unsigned long)pid);
+        sys_printstr(u0_magic);
+        sys_printhex((unsigned long)magic);
+        sys_printstr(u0_add);
+        sys_printhex((unsigned long)sum);
+        sys_printstr(u0_copyout);
+        sys_printhex(user_copyout_value);
+        sys_printstr(u0_nl);
     } else {
-        sys_printstr("[USER0] TEST FAIL\n");
+        sys_printstr(u0_copyout_fail);
+    }
+
+    long code = -1;
+    long status = -1;
+
+    sys_printstr(u0_wait);
+    code = sys_wait(1, &status);
+    sys_printstr(u0_wait_ret);
+    sys_printhex((unsigned long)status);
+    sys_printstr(u0_nl);
+
+    if (code == 0 &&
+        status == 42 &&
+        sum == 84 &&
+        magic == 'Z' &&
+        user_copyout_value == u0_expected_copyout) {
+        sys_printstr(u0_pass);
+    } else {
+        sys_printstr(u0_fail);
     }
 
     sys_exit(0);
     while (1) { }
 }
 
-USER_TEXT void user_main2(void)
-{
+USER_TEXT void user_main2(void){
     long pid = sys_getpid();
     long sum = sys_add(10, 32);
 
-    sys_printstr("[USER1] pid=");
+    sys_printstr(u1_pid);
     sys_printhex((unsigned long)pid);
-    sys_printstr(" add(10,32)=");
+    sys_printstr(u1_add);
     sys_printhex((unsigned long)sum);
-    sys_printstr("\n");
+    sys_printstr(u0_nl);
 
-    sys_printstr("[USER1] sleep 3 ticks\n");
+    sys_printstr(u1_sleep);
     sys_sleep(3);
     sys_yield();
 
-    sys_printstr("[USER1] exit now\n");
+    sys_printstr(u1_exit);
     sys_exit(42);
 
     while (1) { }
@@ -1429,7 +1781,6 @@ USER_TEXT static inline long do_syscall0(long n) {
 
     return a0;
 }
-
 USER_TEXT static inline long do_syscall1(long n, long x) {
     register long a0 asm("a0") = x;
     register long a7 asm("a7") = n;
@@ -1443,7 +1794,6 @@ USER_TEXT static inline long do_syscall1(long n, long x) {
 
     return a0;
 }
-
 USER_TEXT static inline long do_syscall2(long n, long x, long y) {
     register long a0 asm("a0") = x;
     register long a1 asm("a1") = y;
@@ -1491,12 +1841,16 @@ USER_TEXT long sys_sleep(long tick_count) {
     return do_syscall1(SYS_SLEEP, tick_count);
 }
 
-USER_TEXT long sys_wait(long pid) {
-    return do_syscall1(SYS_WAIT, pid);
+USER_TEXT long sys_wait(long pid, long *status) {
+    return do_syscall2(SYS_WAIT, pid, (long)status);
 }
 
 USER_TEXT long sys_getpid(void) {
     return do_syscall0(SYS_GETPID);
+}
+
+USER_TEXT long sys_fillbuf(unsigned long *buf) {
+    return do_syscall1(SYS_FILLBUF, (long)buf);
 }
 
 ```
@@ -1511,12 +1865,23 @@ USER_TEXT long sys_getpid(void) {
 #include "riscv.h"
 #include "memlayout.h"
 
+extern char __userimage_start[];
+extern char __userimage_end[];
 extern char __usertext_start[];
 extern char __usertext_end[];
+extern char __userrodata_start[];
+extern char __userrodata_end[];
+extern char __userdata_start[];
+extern char __userdata_end[];
+extern char __userbss_start[];
+extern char __userbss_end[];
 
-#define USER_PT_PAGE_COUNT (4 + KERNEL_L0_TABLES)
+#define USER_PT_PAGE_COUNT (5 + KERNEL_L0_TABLES)
 
 static pte_t user_pts[PROC_NUM][USER_PT_PAGE_COUNT][PT_ENTRY_COUNT]
+    __attribute__((aligned(PAGE_SIZE)));
+
+static unsigned char user_image_pages[PROC_NUM][USER_IMAGE_MAX_SIZE]
     __attribute__((aligned(PAGE_SIZE)));
 
 static unsigned char user_stack_pages[PROC_NUM][USER_STACK_SIZE]
@@ -1525,10 +1890,11 @@ static unsigned char user_stack_pages[PROC_NUM][USER_STACK_SIZE]
 /*
  * Layout per process:
  *   [0] root L2
- *   [1] low L1 (for USER_STACK_TOP region)
- *   [2] low L0 (stack leaf table)
- *   [3] kernel L1
- *   [4..] kernel L0 tables covering KERNEL_MAP_SIZE
+ *   [1] low L1 (for low user region)
+ *   [2] low L0 (user image leaf table)
+ *   [3] low L0 (stack leaf table)
+ *   [4] kernel L1
+ *   [5..] kernel L0 tables covering KERNEL_MAP_SIZE
  */
 
 static inline unsigned long vpn2(unsigned long va) {
@@ -1559,22 +1925,6 @@ static inline unsigned long pte_to_pa(pte_t pte) {
     return ((pte >> 10) << PAGE_SHIFT);
 }
 
-void vm_init(void) {
-    for (unsigned long p = 0; p < PROC_NUM; p++) {
-        for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
-            for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
-                user_pts[p][table][i] = 0;
-            }
-        }
-
-        for (unsigned long i = 0; i < USER_STACK_SIZE; i++) {
-            user_stack_pages[p][i] = 0;
-        }
-    }
-
-    print_str("vm scaffold init done\n");
-}
-
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm) {
     pte_t *l2 = (pte_t *)pt;
     pte_t *l1;
@@ -1600,15 +1950,53 @@ void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned lo
     l0[vpn0(va)] = pa_to_pte(pa) | leaf_perm | PTE_V;
 }
 
+unsigned long vm_make_satp(pagetable_t pt) {
+    return SATP_MODE_SV39 | (pt >> PAGE_SHIFT);
+}
+
+void vm_switch_to_user(pagetable_t pt) {
+    if (!pt) {
+        return;
+    }
+
+    w_satp(vm_make_satp(pt));
+    sfence_vma();
+}
+
+void vm_init(void) {
+    for (unsigned long p = 0; p < PROC_NUM; p++) {
+        for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
+            for (unsigned long i = 0; i < PT_ENTRY_COUNT; i++) {
+                user_pts[p][table][i] = 0;
+            }
+        }
+
+        for (unsigned long i = 0; i < USER_IMAGE_MAX_SIZE; i++) {
+            user_image_pages[p][i] = 0;
+        }
+
+        for (unsigned long i = 0; i < USER_STACK_SIZE; i++) {
+            user_stack_pages[p][i] = 0;
+        }
+    }
+
+    print_str("vm scaffold init done\n");
+}
+
 pagetable_t vm_make_user_pagetable(int pid) {
     pte_t *l2;
     pte_t *l1_low;
+    pte_t *l0_image;
     pte_t *l0_stack;
     pte_t *l1_kernel;
     pte_t *l0_kernel[KERNEL_L0_TABLES];
     unsigned long stack_bottom;
-    unsigned long code_start;
-    unsigned long code_end;
+    unsigned long image_size;
+    unsigned long image_map_size;
+    unsigned long rodata_off;
+    unsigned long data_off;
+    unsigned long bss_off;
+    unsigned long bss_end_off;
 
     if (pid < 0 || pid >= PROC_NUM) {
         return 0;
@@ -1616,11 +2004,12 @@ pagetable_t vm_make_user_pagetable(int pid) {
 
     l2 = user_pts[pid][0];
     l1_low = user_pts[pid][1];
-    l0_stack = user_pts[pid][2];
-    l1_kernel = user_pts[pid][3];
+    l0_image = user_pts[pid][2];
+    l0_stack = user_pts[pid][3];
+    l1_kernel = user_pts[pid][4];
 
     for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
-        l0_kernel[t] = user_pts[pid][4 + t];
+        l0_kernel[t] = user_pts[pid][5 + t];
     }
 
     for (unsigned long table = 0; table < USER_PT_PAGE_COUNT; table++) {
@@ -1629,23 +2018,55 @@ pagetable_t vm_make_user_pagetable(int pid) {
         }
     }
 
+    for (unsigned long i = 0; i < USER_IMAGE_MAX_SIZE; i++) {
+        user_image_pages[pid][i] = 0;
+    }
+
     stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
 
-    /*
-     * Low user region for stack.
-     */
-    l2[vpn2(stack_bottom)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
+    l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
+    l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
     l1_low[vpn1(stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
+
+    image_size = (unsigned long)(__userdata_end - __usertext_start);
+    image_map_size = page_up((unsigned long)(__userbss_end - __usertext_start));
+
+    rodata_off = (unsigned long)(__userrodata_start - __usertext_start);
+    data_off = (unsigned long)(__userdata_start - __usertext_start);
+    bss_off = (unsigned long)(__userbss_start - __usertext_start);
+    bss_end_off = (unsigned long)(__userbss_end - __usertext_start);
+
+    if (image_map_size > USER_IMAGE_MAX_SIZE) {
+        print_str("[KERNEL] user image too large\n");
+        return 0;
+    }
+
+    for (unsigned long i = 0; i < image_size; i++) {
+        user_image_pages[pid][i] = __usertext_start[i];
+    }
+
+    for (unsigned long off = 0; off < image_map_size; off += PAGE_SIZE) {
+        unsigned long perm;
+
+        if (off < rodata_off) {
+            perm = PTE_R | PTE_X | PTE_U;
+        } else if (off < data_off) {
+            perm = PTE_R | PTE_U;
+        } else {
+            perm = PTE_R | PTE_W | PTE_U; // bss
+        }
+
+        vm_map_page((pagetable_t)l2,
+                    USER_TEXT_BASE + off,
+                    (unsigned long)user_image_pages[pid] + off,
+                    perm);
+    }
 
     vm_map_page((pagetable_t)l2,
                 stack_bottom,
                 (unsigned long)user_stack_pages[pid],
                 PTE_R | PTE_W | PTE_U);
 
-    /*
-     * Shared kernel mapping window.
-     * Supervisor-only by default.
-     */
     l2[vpn2(KERNEL_MAP_BASE)] = pa_to_pte((unsigned long)l1_kernel) | PTE_V;
 
     for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
@@ -1661,27 +2082,7 @@ pagetable_t vm_make_user_pagetable(int pid) {
         }
     }
 
-    code_start = page_down((unsigned long)__usertext_start);
-    code_end = page_up((unsigned long)__usertext_end);
-
-    for (unsigned long va = code_start; va < code_end; va += PAGE_SIZE) {
-        vm_map_page((pagetable_t)l2, va, va, PTE_R | PTE_X | PTE_U);
-    }
-
     return (pagetable_t)l2;
-}
-
-unsigned long vm_make_satp(pagetable_t pt) {
-    return SATP_MODE_SV39 | (pt >> PAGE_SHIFT);
-}
-
-void vm_switch_to_user(pagetable_t pt) {
-    if (!pt) {
-        return;
-    }
-
-    w_satp(vm_make_satp(pt));
-    sfence_vma();
 }
 ```
 
