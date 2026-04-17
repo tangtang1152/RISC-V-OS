@@ -5,6 +5,7 @@
 #include "proc.h"
 #include "timer.h"
 #include "uaccess.h"
+#include "vm.h"
 
 #define SCAUSE_INTERRUPT (1UL << 63)
 #define SCAUSE_CODE(x)   ((x) & 0xfff)
@@ -136,6 +137,18 @@ void trap_handler(struct trap_frame *tf) {
 
     if (is_page_fault(scause)) {
         if (is_user_fault()) {
+            unsigned long fault_va = r_stval();
+
+            if (current &&
+                vm_handle_user_page_fault(current->pid,
+                                          current->user_pagetable,
+                                          scause,
+                                          fault_va) == 0) {
+                tf->sepc = r_sepc(); // return without advancing sepc
+                vm_switch_to_user(current->user_pagetable);
+                return;
+            }
+
             kill_current_user_fault(tf, scause);
             return;
         }

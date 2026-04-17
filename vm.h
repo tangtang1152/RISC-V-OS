@@ -52,4 +52,7 @@ int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long 
 unsigned long vm_user_image_perm(const user_layout_t *layout, unsigned long va);
 int vm_user_is_demand_range(const user_layout_t *layout, unsigned long va);
 
+pte_t *vm_walk(pagetable_t pt, unsigned long va);
+int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, unsigned long fault_va);
+
 #endif

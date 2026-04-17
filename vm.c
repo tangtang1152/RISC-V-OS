@@ -117,6 +117,81 @@ void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned lo
     l0[vpn0(va)] = pa_to_pte(pa) | leaf_perm | PTE_V;
 }
 
+pte_t *vm_walk(pagetable_t pt, unsigned long va) {
+    pte_t *l2 = (pte_t *)pt;
+    pte_t *l1;
+    pte_t *l0;
+
+    if (!pt) {
+        return 0;
+    }
+
+    if (!(l2[vpn2(va)] & PTE_V)) {
+        return 0;
+    }
+    l1 = (pte_t *)pte_to_pa(l2[vpn2(va)]);
+
+    if (!(l1[vpn1(va)] & PTE_V)) {
+        return 0;
+    }
+    l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
+
+    return &l0[vpn0(va)];
+}
+
+int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, unsigned long fault_va) {
+    user_layout_t layout;
+    unsigned long va_page;
+    unsigned long page_off;
+    unsigned long pa;
+    pte_t *pte;
+
+    if (pid < 0 || pid >= PROC_NUM || !pt) {
+        return -1;
+    }
+
+    if (scause != 13 && scause != 15) {
+        return -1;
+    }
+
+    vm_user_layout_init(&layout);
+
+    if (!vm_user_is_demand_range(&layout, fault_va)) {
+        return -1;
+    }
+
+    va_page = page_down(fault_va);
+    page_off = va_page - USER_TEXT_BASE;
+
+    if (page_off >= USER_IMAGE_MAX_SIZE) {
+        return -1;
+    }
+
+    pte = vm_walk(pt, va_page);
+    if (pte && (*pte & PTE_V)) {
+        return -1;
+    }
+
+    /*
+     * Phase-1 backing:
+     * still use the pre-reserved user_image_pages[pid] as physical backing.
+     * vm_init/vm_make_user_pagetable already zero this area,
+     * so BSS pages naturally come in as zero-filled.
+     */
+    pa = (unsigned long)user_image_pages[pid] + page_off;
+
+    vm_map_page(pt, va_page, pa, PTE_R | PTE_W | PTE_U);
+    sfence_vma();
+
+    print_str("[KERNEL] demand map: pid=");
+    print_hex((unsigned long)pid);
+    print_str(" va=");
+    print_hex(va_page);
+    print_str("\n");
+
+    return 0;
+}
+
 pagetable_t vm_make_user_pagetable(int pid) {
     pte_t *l2;
     pte_t *l1_low;
