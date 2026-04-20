@@ -136,7 +136,7 @@ pte_t *vm_walk(pagetable_t pt, unsigned long va) {
     }
     l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
 
-    return &l0[vpn0(va)];
+    return &l0[vpn0(va)]; // 返回的不是 PA，而是 PTE 指针
 }
 
 int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, unsigned long fault_va) {
@@ -156,6 +156,7 @@ int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, uns
 
     vm_user_layout_init(&layout);
 
+    // fault_va 就是报错的stval
     if (!vm_user_is_demand_range(&layout, fault_va)) {
         return -1;
     }
@@ -167,6 +168,7 @@ int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, uns
         return -1;
     }
 
+    // 已经有映射或者权限问题 就不做
     pte = vm_walk(pt, va_page);
     if (pte && (*pte & PTE_V)) {
         return -1;
@@ -181,6 +183,7 @@ int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, uns
     pa = (unsigned long)user_image_pages[pid] + page_off;
 
     vm_map_page(pt, va_page, pa, PTE_R | PTE_W | PTE_U);
+    // 刷新 TLB
     sfence_vma();
 
     print_str("[KERNEL] demand map: pid=");

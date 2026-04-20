@@ -2,6 +2,9 @@
 #define USER_RODATA  __attribute__((section(".userrodata")))
 #define USER_DATA    __attribute__((section(".userdata")))
 #define USER_BSS     __attribute__((section(".userbss")))
+
+#define PAGE_SIZE 4096UL
+
 #include "syscall.h"
 
 static const char u0_pid[] USER_RODATA = "[USER0] pid=";
@@ -26,7 +29,14 @@ static unsigned long u0_expected_copyout USER_DATA = 0x1122334455667788UL;
 static long user_data_value USER_DATA = 7;
 static long user_bss_value USER_BSS;
 
-static unsigned long user_copyout_value USER_BSS;
+/*
+ * Force a cross-page BSS test:
+ * - user_bss_value will fault/map the first BSS page
+ * - sys_fillbuf() will target a different BSS page that user mode has not touched yet
+ */
+static unsigned char user_bss_probe[PAGE_SIZE * 2] USER_BSS;
+#define USER_COPYOUT_OFFSET (PAGE_SIZE + 128)
+#define USER_COPYOUT_PTR ((unsigned long *)(user_bss_probe + USER_COPYOUT_OFFSET))
 
 USER_TEXT void user_main(void)
 {
@@ -38,7 +48,7 @@ USER_TEXT void user_main(void)
     sum = sys_add(sum, user_data_value);
     sum = sys_add(sum, user_bss_value);
 
-    if (sys_fillbuf(&user_copyout_value) == 0) {
+    if (sys_fillbuf(USER_COPYOUT_PTR) == 0) {
         sys_printstr(u0_pid);
         sys_printhex((unsigned long)pid);
         sys_printstr(u0_magic);
@@ -46,7 +56,7 @@ USER_TEXT void user_main(void)
         sys_printstr(u0_add);
         sys_printhex((unsigned long)sum);
         sys_printstr(u0_copyout);
-        sys_printhex(user_copyout_value);
+        sys_printhex(*USER_COPYOUT_PTR);
         sys_printstr(u0_nl);
     } else {
         sys_printstr(u0_copyout_fail);
@@ -65,7 +75,7 @@ USER_TEXT void user_main(void)
         status == 42 &&
         sum == 84 &&
         magic == 'Z' &&
-        user_copyout_value == u0_expected_copyout) {
+        *USER_COPYOUT_PTR == u0_expected_copyout) {
         sys_printstr(u0_pass);
     } else {
         sys_printstr(u0_fail);
