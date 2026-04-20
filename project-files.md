@@ -1,6 +1,6 @@
 # Project Files Export
 
-Export time: 4/20/2026, 10:50:11 PM
+Export time: 4/21/2026, 2:19:44 AM
 
 Source directory: `riscv`
 
@@ -38,14 +38,14 @@ riscv
 ## File Statistics
 
 - Total files: 22
-- Total size: 54.2 KB
+- Total size: 58.2 KB
 
 ### File Type Distribution
 
 | Extension | Files | Total Size |
 | --- | --- | --- |
 | .h | 9 | 9.0 KB |
-| .c | 8 | 36.6 KB |
+| .c | 8 | 40.5 KB |
 | (no extension) | 2 | 833 bytes |
 | .s | 2 | 6.5 KB |
 | .ld | 1 | 1.3 KB |
@@ -951,6 +951,52 @@ static void kill_current_user_fault(struct trap_frame *tf, unsigned long scause)
     vm_switch_to_user(current->user_pagetable);
 }
 
+static int scause_to_vm_access(unsigned long scause, vm_access_t *access_out) {
+    // 空指针
+    if (!access_out) {
+        return -1;
+    }
+
+    switch (scause) {
+        case SCAUSE_INST_PAGE_FAULT:
+            *access_out = VM_ACCESS_EXEC;
+            return 0;
+        case SCAUSE_LOAD_PAGE_FAULT:
+            *access_out = VM_ACCESS_READ;
+            return 0;
+        case SCAUSE_STORE_PAGE_FAULT:
+            *access_out = VM_ACCESS_WRITE;
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+static int handle_user_page_fault(struct trap_frame *tf, unsigned long scause) {
+    unsigned long fault_va = r_stval();
+    vm_access_t access;
+
+    if (!current) {
+        return -1;
+    }
+
+    if (scause_to_vm_access(scause, &access) < 0) {
+        return -1;
+    }
+
+    if (vm_ensure_user_access(current->pid,
+                              current->user_pagetable,
+                              fault_va,
+                              access,
+                              0) < 0) {
+        return -1;
+    }
+
+    tf->sepc = r_sepc();
+    vm_switch_to_user(current->user_pagetable);
+    return 0;
+}
+
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
 
@@ -983,15 +1029,7 @@ void trap_handler(struct trap_frame *tf) {
 
     if (is_page_fault(scause)) {
         if (is_user_fault()) {
-            unsigned long fault_va = r_stval();
-
-            if (current &&
-                vm_handle_user_page_fault(current->pid,
-                                          current->user_pagetable,
-                                          scause,
-                                          fault_va) == 0) {
-                tf->sepc = r_sepc(); // return without advancing sepc
-                vm_switch_to_user(current->user_pagetable);
+            if (handle_user_page_fault(tf, scause) == 0) {
                 return;
             }
 
@@ -1554,10 +1592,21 @@ user_entry2:
 ```c
 // uaccess.c
 #include "uaccess.h"
-#include "riscv.h"
 #include "memlayout.h"
+#include "proc.h"
+#include "vm.h"
 
-#define SSTATUS_SUM (1UL << 18)
+static int ensure_user_access(unsigned long va, vm_access_t access, unsigned long *pa_out) {
+    if (!current) {
+        return -1;
+    }
+
+    return vm_ensure_user_access(current->pid,
+                                 current->user_pagetable,
+                                 va,
+                                 access,
+                                 pa_out);
+}
 
 static int range_in_segment(unsigned long addr, unsigned long len, unsigned long start, unsigned long end) {
     unsigned long last;
@@ -1590,9 +1639,8 @@ static int user_range_ok(const void *uaddr, unsigned long len) {
 }
 
 int copyin(const void *uaddr, void *kaddr, unsigned long len) {
-    const unsigned char *src = (const unsigned char *)uaddr;
+    unsigned long src_va = (unsigned long)uaddr;
     unsigned char *dst = (unsigned char *)kaddr;
-    unsigned long sstatus;
 
     if ((!uaddr && len != 0) || (!kaddr && len != 0)) {
         return -1;
@@ -1601,21 +1649,31 @@ int copyin(const void *uaddr, void *kaddr, unsigned long len) {
         return -1;
     }
 
-    sstatus = r_sstatus();
-    w_sstatus(sstatus | SSTATUS_SUM);
+    while (len > 0) {
+        // len比此页剩下空间大 多的就得分到下一页
+        unsigned long page_left = PAGE_SIZE - (src_va & (PAGE_SIZE - 1));
+        unsigned long chunk = (len < page_left) ? len : page_left;
+        unsigned long src_pa;
 
-    for (unsigned long i = 0; i < len; i++) {
-        dst[i] = src[i];
+        if (ensure_user_access(src_va, VM_ACCESS_READ, &src_pa) < 0) {
+            return -1;
+        }
+
+        for (unsigned long i = 0; i < chunk; i++) {
+            dst[i] = ((unsigned char *)src_pa)[i];
+        }
+
+        src_va += chunk;
+        dst += chunk;
+        len -= chunk;
     }
 
-    w_sstatus(sstatus);
     return 0;
 }
 
 int copyout(void *uaddr, const void *kaddr, unsigned long len) {
-    unsigned char *dst = (unsigned char *)uaddr;
+    unsigned long dst_va = (unsigned long)uaddr;
     const unsigned char *src = (const unsigned char *)kaddr;
-    unsigned long sstatus;
 
     if ((!uaddr && len != 0) || (!kaddr && len != 0)) {
         return -1;
@@ -1624,42 +1682,87 @@ int copyout(void *uaddr, const void *kaddr, unsigned long len) {
         return -1;
     }
 
-    sstatus = r_sstatus();
-    w_sstatus(sstatus | SSTATUS_SUM);
+    while (len > 0) {
+        unsigned long page_left = PAGE_SIZE - (dst_va & (PAGE_SIZE - 1));
+        unsigned long chunk = (len < page_left) ? len : page_left;
+        unsigned long dst_pa;
 
-    for (unsigned long i = 0; i < len; i++) {
-        dst[i] = src[i];
+        if (ensure_user_access(dst_va, VM_ACCESS_WRITE, &dst_pa) < 0) {
+            return -1;
+        }
+
+        for (unsigned long i = 0; i < chunk; i++) {
+            ((unsigned char *)dst_pa)[i] = src[i];
+        }
+
+        dst_va += chunk;
+        src += chunk;
+        len -= chunk;
     }
 
-    w_sstatus(sstatus);
     return 0;
 }
 
+/* 不可以这样 
+char ch = uaddr[i]; 这一步还是：用用户虚拟地址；在内核里直接解引用
+现在不是靠 SUM 了，而是靠“翻译到物理页 backing 再访问”。
 int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen) {
-    unsigned long sstatus;
 
     if (!uaddr || !kbuf || maxlen == 0) {
         return -1;
     }
 
-    sstatus = r_sstatus();
-    w_sstatus(sstatus | SSTATUS_SUM);
-
     for (unsigned long i = 0; i < maxlen; i++) {
-        if (!user_range_ok(uaddr + i, 1)) {
-            w_sstatus(sstatus);
+        if (!user_range_ok((const void *)src_va, 1)) {
+            return -1;
+        }
+
+        if (ensure_user_access(src_va, VM_ACCESS_READ, &src_pa) < 0) {
             return -1;
         }
 
         char ch = uaddr[i];
         kbuf[i] = ch;
+
         if (ch == '\0') {
-            w_sstatus(sstatus);
             return 0;
         }
     }
 
-    w_sstatus(sstatus);
+    kbuf[maxlen - 1] = '\0';
+    return -1;
+}
+*/
+
+int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen) {
+    unsigned long src_va = (unsigned long)uaddr;
+
+    if (!uaddr || !kbuf || maxlen == 0) {
+        return -1;
+    }
+
+    for (unsigned long i = 0; i < maxlen; i++) {
+        unsigned long src_pa;
+        char ch;
+
+        if (!user_range_ok((const void *)src_va, 1)) {
+            return -1;
+        }
+
+        if (ensure_user_access(src_va, VM_ACCESS_READ, &src_pa) < 0) {
+            return -1;
+        }
+
+        ch = *(char *)src_pa;
+        kbuf[i] = ch;
+
+        if (ch == '\0') {
+            return 0;
+        }
+
+        src_va++;
+    }
+
     kbuf[maxlen - 1] = '\0';
     return -1;
 }
@@ -1903,10 +2006,8 @@ extern char __userbss_end[];
 
 static pte_t user_pts[PROC_NUM][USER_PT_PAGE_COUNT][PT_ENTRY_COUNT]
     __attribute__((aligned(PAGE_SIZE)));
-
 static unsigned char user_image_pages[PROC_NUM][USER_IMAGE_MAX_SIZE]
     __attribute__((aligned(PAGE_SIZE)));
-
 static unsigned char user_stack_pages[PROC_NUM][USER_STACK_SIZE]
     __attribute__((aligned(PAGE_SIZE)));
 
@@ -1943,10 +2044,73 @@ static inline unsigned long pte_to_pa(pte_t pte) {
     return ((pte >> 10) << PAGE_SHIFT);
 }
 
+static unsigned long vm_access_to_pte_perm(vm_access_t access) {
+    unsigned long perm = 0;
+
+    if (access & VM_ACCESS_READ) {
+        perm |= PTE_R;
+    }
+    if (access & VM_ACCESS_WRITE) {
+        perm |= PTE_W;
+    }
+    if (access & VM_ACCESS_EXEC) {
+        perm |= PTE_X;
+    }
+
+    return perm;
+}
+
+static int vm_try_map_user_demand_page(int pid,
+                                       pagetable_t pt,
+                                       unsigned long va,
+                                       vm_access_t access) {
+    user_layout_t layout;
+    unsigned long va_page;
+    unsigned long page_off;
+    unsigned long pa;
+    pte_t *pte;
+
+    (void)access;
+
+    if (pid < 0 || pid >= PROC_NUM || !pt) {
+        return -1;
+    }
+
+    vm_user_layout_init(&layout);
+
+    if (!vm_user_is_demand_range(&layout, va)) {
+        return -1;
+    }
+
+    va_page = page_down(va);
+    page_off = va_page - USER_TEXT_BASE;
+
+    if (page_off >= USER_IMAGE_MAX_SIZE) {
+        return -1;
+    }
+
+    pte = vm_walk(pt, va_page);
+    if (pte && (*pte & PTE_V)) {
+        return 0;
+    }
+
+    pa = (unsigned long)user_image_pages[pid] + page_off;
+
+    vm_map_page(pt, va_page, pa, PTE_R | PTE_W | PTE_U);
+    sfence_vma();
+
+    print_str("[KERNEL] demand map: pid=");
+    print_hex((unsigned long)pid);
+    print_str(" va=");
+    print_hex(va_page);
+    print_str("\n");
+
+    return 0;
+}
+
 unsigned long vm_make_satp(pagetable_t pt) {
     return SATP_MODE_SV39 | (pt >> PAGE_SHIFT);
 }
-
 void vm_switch_to_user(pagetable_t pt) {
     if (!pt) {
         return;
@@ -2021,62 +2185,6 @@ pte_t *vm_walk(pagetable_t pt, unsigned long va) {
     l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
 
     return &l0[vpn0(va)]; // 返回的不是 PA，而是 PTE 指针
-}
-
-int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, unsigned long fault_va) {
-    user_layout_t layout;
-    unsigned long va_page;
-    unsigned long page_off;
-    unsigned long pa;
-    pte_t *pte;
-
-    if (pid < 0 || pid >= PROC_NUM || !pt) {
-        return -1;
-    }
-
-    if (scause != 13 && scause != 15) {
-        return -1;
-    }
-
-    vm_user_layout_init(&layout);
-
-    // fault_va 就是报错的stval
-    if (!vm_user_is_demand_range(&layout, fault_va)) {
-        return -1;
-    }
-
-    va_page = page_down(fault_va);
-    page_off = va_page - USER_TEXT_BASE;
-
-    if (page_off >= USER_IMAGE_MAX_SIZE) {
-        return -1;
-    }
-
-    // 已经有映射或者权限问题 就不做
-    pte = vm_walk(pt, va_page);
-    if (pte && (*pte & PTE_V)) {
-        return -1;
-    }
-
-    /*
-     * Phase-1 backing:
-     * still use the pre-reserved user_image_pages[pid] as physical backing.
-     * vm_init/vm_make_user_pagetable already zero this area,
-     * so BSS pages naturally come in as zero-filled.
-     */
-    pa = (unsigned long)user_image_pages[pid] + page_off;
-
-    vm_map_page(pt, va_page, pa, PTE_R | PTE_W | PTE_U);
-    // 刷新 TLB
-    sfence_vma();
-
-    print_str("[KERNEL] demand map: pid=");
-    print_hex((unsigned long)pid);
-    print_str(" va=");
-    print_hex(va_page);
-    print_str("\n");
-
-    return 0;
 }
 
 pagetable_t vm_make_user_pagetable(int pid) {
@@ -2177,6 +2285,71 @@ pagetable_t vm_make_user_pagetable(int pid) {
     }
 
     return (pagetable_t)l2;
+}
+
+int vm_translate_user(pagetable_t pt,
+                      unsigned long va,
+                      vm_access_t access,
+                      unsigned long *pa_out) {
+    pte_t *pte;
+    unsigned long need_perm;
+
+    if (!pt || !pa_out) {
+        return -1;
+    }
+
+    pte = vm_walk(pt, va);
+    if (!pte) {
+        return -1;
+    }
+
+    if (!(*pte & PTE_V) || !(*pte & PTE_U)) {
+        return -1;
+    }
+
+    need_perm = vm_access_to_pte_perm(access);
+
+    if ((need_perm & PTE_R) && !(*pte & PTE_R)) {
+        return -1;
+    }
+    if ((need_perm & PTE_W) && !(*pte & PTE_W)) {
+        return -1;
+    }
+    if ((need_perm & PTE_X) && !(*pte & PTE_X)) {
+        return -1;
+    }
+
+    *pa_out = pte_to_pa(*pte) + (va & (PAGE_SIZE - 1)); // + offset
+    return 0;
+}
+
+int vm_ensure_user_access(int pid,
+                          pagetable_t pt,
+                          unsigned long va,
+                          vm_access_t access,
+                          unsigned long *pa_out) {
+    unsigned long pa;
+
+    if (vm_translate_user(pt, va, access, &pa) == 0) {
+        if (pa_out) {
+            *pa_out = pa;
+        }
+        return 0;
+    }
+
+    if (vm_try_map_user_demand_page(pid, pt, va, access) < 0) {
+        return -1;
+    }
+
+    // 再试一次
+    if (vm_translate_user(pt, va, access, &pa) < 0) {
+        return -1;
+    }
+
+    if (pa_out) {
+        *pa_out = pa;
+    }
+    return 0;
 }
 
 void vm_user_layout_init(user_layout_t *l) {

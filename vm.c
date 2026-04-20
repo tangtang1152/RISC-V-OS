@@ -73,6 +73,21 @@ static unsigned long vm_access_to_pte_perm(vm_access_t access) {
     return perm;
 }
 
+/*
+ * Phase-1 lazy mapping policy
+ *
+ * Supported now:
+ *   - lazy range: [layout.demand_start, layout.demand_end)
+ *   - current concrete use: USER_BSS + future heap reserve
+ *   - backing source: pre-reserved user_image_pages[pid]
+ *   - mapped permission: RWU
+ *
+ * Not supported yet:
+ *   - instruction-demand paging for text
+ *   - stack growth
+ *   - true physical page allocation
+ *   - per-segment lazy permission refinement
+ */
 static int vm_try_map_user_demand_page(int pid,
                                        pagetable_t pt,
                                        unsigned long va,
@@ -207,13 +222,6 @@ pagetable_t vm_make_user_pagetable(int pid) {
     pte_t *l0_stack;
     pte_t *l1_kernel;
     pte_t *l0_kernel[KERNEL_L0_TABLES];
-    unsigned long stack_bottom;
-    unsigned long image_size;
-    unsigned long image_map_size;
-    unsigned long rodata_off;
-    unsigned long data_off;
-    unsigned long bss_off;
-    unsigned long bss_end_off;
 
     if (pid < 0 || pid >= PROC_NUM) {
         return 0;

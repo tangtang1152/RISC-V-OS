@@ -110,37 +110,6 @@ int copyout(void *uaddr, const void *kaddr, unsigned long len) {
     return 0;
 }
 
-/* 不可以这样 
-char ch = uaddr[i]; 这一步还是：用用户虚拟地址；在内核里直接解引用
-现在不是靠 SUM 了，而是靠“翻译到物理页 backing 再访问”。
-int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen) {
-
-    if (!uaddr || !kbuf || maxlen == 0) {
-        return -1;
-    }
-
-    for (unsigned long i = 0; i < maxlen; i++) {
-        if (!user_range_ok((const void *)src_va, 1)) {
-            return -1;
-        }
-
-        if (ensure_user_access(src_va, VM_ACCESS_READ, &src_pa) < 0) {
-            return -1;
-        }
-
-        char ch = uaddr[i];
-        kbuf[i] = ch;
-
-        if (ch == '\0') {
-            return 0;
-        }
-    }
-
-    kbuf[maxlen - 1] = '\0';
-    return -1;
-}
-*/
-
 int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen) {
     unsigned long src_va = (unsigned long)uaddr;
 
