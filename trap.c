@@ -105,6 +105,52 @@ static void kill_current_user_fault(struct trap_frame *tf, unsigned long scause)
     vm_switch_to_user(current->user_pagetable);
 }
 
+static int scause_to_vm_access(unsigned long scause, vm_access_t *access_out) {
+    // 空指针
+    if (!access_out) {
+        return -1;
+    }
+
+    switch (scause) {
+        case SCAUSE_INST_PAGE_FAULT:
+            *access_out = VM_ACCESS_EXEC;
+            return 0;
+        case SCAUSE_LOAD_PAGE_FAULT:
+            *access_out = VM_ACCESS_READ;
+            return 0;
+        case SCAUSE_STORE_PAGE_FAULT:
+            *access_out = VM_ACCESS_WRITE;
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+static int handle_user_page_fault(struct trap_frame *tf, unsigned long scause) {
+    unsigned long fault_va = r_stval();
+    vm_access_t access;
+
+    if (!current) {
+        return -1;
+    }
+
+    if (scause_to_vm_access(scause, &access) < 0) {
+        return -1;
+    }
+
+    if (vm_ensure_user_access(current->pid,
+                              current->user_pagetable,
+                              fault_va,
+                              access,
+                              0) < 0) {
+        return -1;
+    }
+
+    tf->sepc = r_sepc();
+    vm_switch_to_user(current->user_pagetable);
+    return 0;
+}
+
 void trap_handler(struct trap_frame *tf) {
     unsigned long scause = r_scause();
 
@@ -137,15 +183,7 @@ void trap_handler(struct trap_frame *tf) {
 
     if (is_page_fault(scause)) {
         if (is_user_fault()) {
-            unsigned long fault_va = r_stval();
-
-            if (current &&
-                vm_handle_user_page_fault(current->pid,
-                                          current->user_pagetable,
-                                          scause,
-                                          fault_va) == 0) {
-                tf->sepc = r_sepc(); // return without advancing sepc
-                vm_switch_to_user(current->user_pagetable);
+            if (handle_user_page_fault(tf, scause) == 0) {
                 return;
             }
 

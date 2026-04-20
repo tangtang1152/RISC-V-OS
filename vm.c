@@ -19,10 +19,8 @@ extern char __userbss_end[];
 
 static pte_t user_pts[PROC_NUM][USER_PT_PAGE_COUNT][PT_ENTRY_COUNT]
     __attribute__((aligned(PAGE_SIZE)));
-
 static unsigned char user_image_pages[PROC_NUM][USER_IMAGE_MAX_SIZE]
     __attribute__((aligned(PAGE_SIZE)));
-
 static unsigned char user_stack_pages[PROC_NUM][USER_STACK_SIZE]
     __attribute__((aligned(PAGE_SIZE)));
 
@@ -59,10 +57,73 @@ static inline unsigned long pte_to_pa(pte_t pte) {
     return ((pte >> 10) << PAGE_SHIFT);
 }
 
+static unsigned long vm_access_to_pte_perm(vm_access_t access) {
+    unsigned long perm = 0;
+
+    if (access & VM_ACCESS_READ) {
+        perm |= PTE_R;
+    }
+    if (access & VM_ACCESS_WRITE) {
+        perm |= PTE_W;
+    }
+    if (access & VM_ACCESS_EXEC) {
+        perm |= PTE_X;
+    }
+
+    return perm;
+}
+
+static int vm_try_map_user_demand_page(int pid,
+                                       pagetable_t pt,
+                                       unsigned long va,
+                                       vm_access_t access) {
+    user_layout_t layout;
+    unsigned long va_page;
+    unsigned long page_off;
+    unsigned long pa;
+    pte_t *pte;
+
+    (void)access;
+
+    if (pid < 0 || pid >= PROC_NUM || !pt) {
+        return -1;
+    }
+
+    vm_user_layout_init(&layout);
+
+    if (!vm_user_is_demand_range(&layout, va)) {
+        return -1;
+    }
+
+    va_page = page_down(va);
+    page_off = va_page - USER_TEXT_BASE;
+
+    if (page_off >= USER_IMAGE_MAX_SIZE) {
+        return -1;
+    }
+
+    pte = vm_walk(pt, va_page);
+    if (pte && (*pte & PTE_V)) {
+        return 0;
+    }
+
+    pa = (unsigned long)user_image_pages[pid] + page_off;
+
+    vm_map_page(pt, va_page, pa, PTE_R | PTE_W | PTE_U);
+    sfence_vma();
+
+    print_str("[KERNEL] demand map: pid=");
+    print_hex((unsigned long)pid);
+    print_str(" va=");
+    print_hex(va_page);
+    print_str("\n");
+
+    return 0;
+}
+
 unsigned long vm_make_satp(pagetable_t pt) {
     return SATP_MODE_SV39 | (pt >> PAGE_SHIFT);
 }
-
 void vm_switch_to_user(pagetable_t pt) {
     if (!pt) {
         return;
@@ -137,62 +198,6 @@ pte_t *vm_walk(pagetable_t pt, unsigned long va) {
     l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
 
     return &l0[vpn0(va)]; // 返回的不是 PA，而是 PTE 指针
-}
-
-int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, unsigned long fault_va) {
-    user_layout_t layout;
-    unsigned long va_page;
-    unsigned long page_off;
-    unsigned long pa;
-    pte_t *pte;
-
-    if (pid < 0 || pid >= PROC_NUM || !pt) {
-        return -1;
-    }
-
-    if (scause != 13 && scause != 15) {
-        return -1;
-    }
-
-    vm_user_layout_init(&layout);
-
-    // fault_va 就是报错的stval
-    if (!vm_user_is_demand_range(&layout, fault_va)) {
-        return -1;
-    }
-
-    va_page = page_down(fault_va);
-    page_off = va_page - USER_TEXT_BASE;
-
-    if (page_off >= USER_IMAGE_MAX_SIZE) {
-        return -1;
-    }
-
-    // 已经有映射或者权限问题 就不做
-    pte = vm_walk(pt, va_page);
-    if (pte && (*pte & PTE_V)) {
-        return -1;
-    }
-
-    /*
-     * Phase-1 backing:
-     * still use the pre-reserved user_image_pages[pid] as physical backing.
-     * vm_init/vm_make_user_pagetable already zero this area,
-     * so BSS pages naturally come in as zero-filled.
-     */
-    pa = (unsigned long)user_image_pages[pid] + page_off;
-
-    vm_map_page(pt, va_page, pa, PTE_R | PTE_W | PTE_U);
-    // 刷新 TLB
-    sfence_vma();
-
-    print_str("[KERNEL] demand map: pid=");
-    print_hex((unsigned long)pid);
-    print_str(" va=");
-    print_hex(va_page);
-    print_str("\n");
-
-    return 0;
 }
 
 pagetable_t vm_make_user_pagetable(int pid) {
@@ -293,6 +298,71 @@ pagetable_t vm_make_user_pagetable(int pid) {
     }
 
     return (pagetable_t)l2;
+}
+
+int vm_translate_user(pagetable_t pt,
+                      unsigned long va,
+                      vm_access_t access,
+                      unsigned long *pa_out) {
+    pte_t *pte;
+    unsigned long need_perm;
+
+    if (!pt || !pa_out) {
+        return -1;
+    }
+
+    pte = vm_walk(pt, va);
+    if (!pte) {
+        return -1;
+    }
+
+    if (!(*pte & PTE_V) || !(*pte & PTE_U)) {
+        return -1;
+    }
+
+    need_perm = vm_access_to_pte_perm(access);
+
+    if ((need_perm & PTE_R) && !(*pte & PTE_R)) {
+        return -1;
+    }
+    if ((need_perm & PTE_W) && !(*pte & PTE_W)) {
+        return -1;
+    }
+    if ((need_perm & PTE_X) && !(*pte & PTE_X)) {
+        return -1;
+    }
+
+    *pa_out = pte_to_pa(*pte) + (va & (PAGE_SIZE - 1)); // + offset
+    return 0;
+}
+
+int vm_ensure_user_access(int pid,
+                          pagetable_t pt,
+                          unsigned long va,
+                          vm_access_t access,
+                          unsigned long *pa_out) {
+    unsigned long pa;
+
+    if (vm_translate_user(pt, va, access, &pa) == 0) {
+        if (pa_out) {
+            *pa_out = pa;
+        }
+        return 0;
+    }
+
+    if (vm_try_map_user_demand_page(pid, pt, va, access) < 0) {
+        return -1;
+    }
+
+    // 再试一次
+    if (vm_translate_user(pt, va, access, &pa) < 0) {
+        return -1;
+    }
+
+    if (pa_out) {
+        *pa_out = pa;
+    }
+    return 0;
 }
 
 void vm_user_layout_init(user_layout_t *l) {

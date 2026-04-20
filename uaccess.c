@@ -1,8 +1,19 @@
 #include "uaccess.h"
-#include "riscv.h"
 #include "memlayout.h"
+#include "proc.h"
+#include "vm.h"
 
-#define SSTATUS_SUM (1UL << 18)
+static int ensure_user_access(unsigned long va, vm_access_t access, unsigned long *pa_out) {
+    if (!current) {
+        return -1;
+    }
+
+    return vm_ensure_user_access(current->pid,
+                                 current->user_pagetable,
+                                 va,
+                                 access,
+                                 pa_out);
+}
 
 static int range_in_segment(unsigned long addr, unsigned long len, unsigned long start, unsigned long end) {
     unsigned long last;
@@ -35,9 +46,8 @@ static int user_range_ok(const void *uaddr, unsigned long len) {
 }
 
 int copyin(const void *uaddr, void *kaddr, unsigned long len) {
-    const unsigned char *src = (const unsigned char *)uaddr;
+    unsigned long src_va = (unsigned long)uaddr;
     unsigned char *dst = (unsigned char *)kaddr;
-    unsigned long sstatus;
 
     if ((!uaddr && len != 0) || (!kaddr && len != 0)) {
         return -1;
@@ -46,21 +56,31 @@ int copyin(const void *uaddr, void *kaddr, unsigned long len) {
         return -1;
     }
 
-    sstatus = r_sstatus();
-    w_sstatus(sstatus | SSTATUS_SUM);
+    while (len > 0) {
+        // len比此页剩下空间大 多的就得分到下一页
+        unsigned long page_left = PAGE_SIZE - (src_va & (PAGE_SIZE - 1));
+        unsigned long chunk = (len < page_left) ? len : page_left;
+        unsigned long src_pa;
 
-    for (unsigned long i = 0; i < len; i++) {
-        dst[i] = src[i];
+        if (ensure_user_access(src_va, VM_ACCESS_READ, &src_pa) < 0) {
+            return -1;
+        }
+
+        for (unsigned long i = 0; i < chunk; i++) {
+            dst[i] = ((unsigned char *)src_pa)[i];
+        }
+
+        src_va += chunk;
+        dst += chunk;
+        len -= chunk;
     }
 
-    w_sstatus(sstatus);
     return 0;
 }
 
 int copyout(void *uaddr, const void *kaddr, unsigned long len) {
-    unsigned char *dst = (unsigned char *)uaddr;
+    unsigned long dst_va = (unsigned long)uaddr;
     const unsigned char *src = (const unsigned char *)kaddr;
-    unsigned long sstatus;
 
     if ((!uaddr && len != 0) || (!kaddr && len != 0)) {
         return -1;
@@ -69,42 +89,87 @@ int copyout(void *uaddr, const void *kaddr, unsigned long len) {
         return -1;
     }
 
-    sstatus = r_sstatus();
-    w_sstatus(sstatus | SSTATUS_SUM);
+    while (len > 0) {
+        unsigned long page_left = PAGE_SIZE - (dst_va & (PAGE_SIZE - 1));
+        unsigned long chunk = (len < page_left) ? len : page_left;
+        unsigned long dst_pa;
 
-    for (unsigned long i = 0; i < len; i++) {
-        dst[i] = src[i];
+        if (ensure_user_access(dst_va, VM_ACCESS_WRITE, &dst_pa) < 0) {
+            return -1;
+        }
+
+        for (unsigned long i = 0; i < chunk; i++) {
+            ((unsigned char *)dst_pa)[i] = src[i];
+        }
+
+        dst_va += chunk;
+        src += chunk;
+        len -= chunk;
     }
 
-    w_sstatus(sstatus);
     return 0;
 }
 
+/* 不可以这样 
+char ch = uaddr[i]; 这一步还是：用用户虚拟地址；在内核里直接解引用
+现在不是靠 SUM 了，而是靠“翻译到物理页 backing 再访问”。
 int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen) {
-    unsigned long sstatus;
 
     if (!uaddr || !kbuf || maxlen == 0) {
         return -1;
     }
 
-    sstatus = r_sstatus();
-    w_sstatus(sstatus | SSTATUS_SUM);
-
     for (unsigned long i = 0; i < maxlen; i++) {
-        if (!user_range_ok(uaddr + i, 1)) {
-            w_sstatus(sstatus);
+        if (!user_range_ok((const void *)src_va, 1)) {
+            return -1;
+        }
+
+        if (ensure_user_access(src_va, VM_ACCESS_READ, &src_pa) < 0) {
             return -1;
         }
 
         char ch = uaddr[i];
         kbuf[i] = ch;
+
         if (ch == '\0') {
-            w_sstatus(sstatus);
             return 0;
         }
     }
 
-    w_sstatus(sstatus);
+    kbuf[maxlen - 1] = '\0';
+    return -1;
+}
+*/
+
+int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen) {
+    unsigned long src_va = (unsigned long)uaddr;
+
+    if (!uaddr || !kbuf || maxlen == 0) {
+        return -1;
+    }
+
+    for (unsigned long i = 0; i < maxlen; i++) {
+        unsigned long src_pa;
+        char ch;
+
+        if (!user_range_ok((const void *)src_va, 1)) {
+            return -1;
+        }
+
+        if (ensure_user_access(src_va, VM_ACCESS_READ, &src_pa) < 0) {
+            return -1;
+        }
+
+        ch = *(char *)src_pa;
+        kbuf[i] = ch;
+
+        if (ch == '\0') {
+            return 0;
+        }
+
+        src_va++;
+    }
+
     kbuf[maxlen - 1] = '\0';
     return -1;
 }

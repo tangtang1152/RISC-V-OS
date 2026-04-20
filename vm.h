@@ -41,6 +41,12 @@ typedef struct {
     unsigned long stack_top;
 } user_layout_t;
 
+typedef enum {
+    VM_ACCESS_READ = 1,
+    VM_ACCESS_WRITE = 2,
+    VM_ACCESS_EXEC = 4,
+} vm_access_t;
+
 void vm_init(void);
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm);
 pagetable_t vm_make_user_pagetable(int pid);
@@ -53,6 +59,26 @@ unsigned long vm_user_image_perm(const user_layout_t *layout, unsigned long va);
 int vm_user_is_demand_range(const user_layout_t *layout, unsigned long va);
 
 pte_t *vm_walk(pagetable_t pt, unsigned long va);
-int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, unsigned long fault_va);
 
+/*
+ * Pure query:
+ *   return 0 on success and store translated PA in *pa_out
+ *   return -1 if unmapped / permission denied / invalid
+ */
+int vm_translate_user(pagetable_t pt,
+                      unsigned long va,
+                      vm_access_t access,
+                      unsigned long *pa_out);
+
+/*
+ * Stateful ensure:
+ *   if already accessible -> success
+ *   if lazily mappable   -> map and then success
+ *   else                 -> fail
+ */
+int vm_ensure_user_access(int pid,
+                          pagetable_t pt,
+                          unsigned long va,
+                          vm_access_t access,
+                          unsigned long *pa_out);
 #endif

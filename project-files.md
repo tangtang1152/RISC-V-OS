@@ -1,6 +1,6 @@
 # Project Files Export
 
-Export time: 4/14/2026, 5:48:51 PM
+Export time: 4/20/2026, 10:50:11 PM
 
 Source directory: `riscv`
 
@@ -38,14 +38,14 @@ riscv
 ## File Statistics
 
 - Total files: 22
-- Total size: 47.8 KB
+- Total size: 54.2 KB
 
 ### File Type Distribution
 
 | Extension | Files | Total Size |
 | --- | --- | --- |
-| .h | 9 | 7.2 KB |
-| .c | 8 | 32.1 KB |
+| .h | 9 | 9.0 KB |
+| .c | 8 | 36.6 KB |
 | (no extension) | 2 | 833 bytes |
 | .s | 2 | 6.5 KB |
 | .ld | 1 | 1.3 KB |
@@ -851,6 +851,7 @@ void timer_tick(void);
 #include "proc.h"
 #include "timer.h"
 #include "uaccess.h"
+#include "vm.h"
 
 #define SCAUSE_INTERRUPT (1UL << 63)
 #define SCAUSE_CODE(x)   ((x) & 0xfff)
@@ -982,6 +983,18 @@ void trap_handler(struct trap_frame *tf) {
 
     if (is_page_fault(scause)) {
         if (is_user_fault()) {
+            unsigned long fault_va = r_stval();
+
+            if (current &&
+                vm_handle_user_page_fault(current->pid,
+                                          current->user_pagetable,
+                                          scause,
+                                          fault_va) == 0) {
+                tf->sepc = r_sepc(); // return without advancing sepc
+                vm_switch_to_user(current->user_pagetable);
+                return;
+            }
+
             kill_current_user_fault(tf, scause);
             return;
         }
@@ -1675,6 +1688,9 @@ int copyinstr(const char *uaddr, char *kbuf, unsigned long maxlen);
 #define USER_RODATA  __attribute__((section(".userrodata")))
 #define USER_DATA    __attribute__((section(".userdata")))
 #define USER_BSS     __attribute__((section(".userbss")))
+
+#define PAGE_SIZE 4096UL
+
 #include "syscall.h"
 
 static const char u0_pid[] USER_RODATA = "[USER0] pid=";
@@ -1699,7 +1715,14 @@ static unsigned long u0_expected_copyout USER_DATA = 0x1122334455667788UL;
 static long user_data_value USER_DATA = 7;
 static long user_bss_value USER_BSS;
 
-static unsigned long user_copyout_value USER_BSS;
+/*
+ * Force a cross-page BSS test:
+ * - user_bss_value will fault/map the first BSS page
+ * - sys_fillbuf() will target a different BSS page that user mode has not touched yet
+ */
+static unsigned char user_bss_probe[PAGE_SIZE * 2] USER_BSS;
+#define USER_COPYOUT_OFFSET (PAGE_SIZE + 128)
+#define USER_COPYOUT_PTR ((unsigned long *)(user_bss_probe + USER_COPYOUT_OFFSET))
 
 USER_TEXT void user_main(void)
 {
@@ -1711,7 +1734,7 @@ USER_TEXT void user_main(void)
     sum = sys_add(sum, user_data_value);
     sum = sys_add(sum, user_bss_value);
 
-    if (sys_fillbuf(&user_copyout_value) == 0) {
+    if (sys_fillbuf(USER_COPYOUT_PTR) == 0) {
         sys_printstr(u0_pid);
         sys_printhex((unsigned long)pid);
         sys_printstr(u0_magic);
@@ -1719,7 +1742,7 @@ USER_TEXT void user_main(void)
         sys_printstr(u0_add);
         sys_printhex((unsigned long)sum);
         sys_printstr(u0_copyout);
-        sys_printhex(user_copyout_value);
+        sys_printhex(*USER_COPYOUT_PTR);
         sys_printstr(u0_nl);
     } else {
         sys_printstr(u0_copyout_fail);
@@ -1738,7 +1761,7 @@ USER_TEXT void user_main(void)
         status == 42 &&
         sum == 84 &&
         magic == 'Z' &&
-        user_copyout_value == u0_expected_copyout) {
+        *USER_COPYOUT_PTR == u0_expected_copyout) {
         sys_printstr(u0_pass);
     } else {
         sys_printstr(u0_fail);
@@ -1900,11 +1923,9 @@ static unsigned char user_stack_pages[PROC_NUM][USER_STACK_SIZE]
 static inline unsigned long vpn2(unsigned long va) {
     return (va >> 30) & 0x1ffUL;
 }
-
 static inline unsigned long vpn1(unsigned long va) {
     return (va >> 21) & 0x1ffUL;
 }
-
 static inline unsigned long vpn0(unsigned long va) {
     return (va >> 12) & 0x1ffUL;
 }
@@ -1912,42 +1933,14 @@ static inline unsigned long vpn0(unsigned long va) {
 static inline unsigned long page_down(unsigned long x) {
     return x & ~(PAGE_SIZE - 1);
 }
-
 static inline unsigned long page_up(unsigned long x) {
     return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 }
-
 static inline unsigned long pa_to_pte(unsigned long pa) {
     return ((pa >> PAGE_SHIFT) << 10);
 }
-
 static inline unsigned long pte_to_pa(pte_t pte) {
     return ((pte >> 10) << PAGE_SHIFT);
-}
-
-void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm) {
-    pte_t *l2 = (pte_t *)pt;
-    pte_t *l1;
-    pte_t *l0;
-    unsigned long leaf_perm = perm | PTE_A;
-
-    if (perm & PTE_W) {
-        leaf_perm |= PTE_D;
-    }
-
-    if (!(l2[vpn2(va)] & PTE_V)) {
-        print_str("[KERNEL] vm_map_page: missing l1 table\n");
-        return;
-    }
-    l1 = (pte_t *)pte_to_pa(l2[vpn2(va)]);
-
-    if (!(l1[vpn1(va)] & PTE_V)) {
-        print_str("[KERNEL] vm_map_page: missing l0 table\n");
-        return;
-    }
-    l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
-
-    l0[vpn0(va)] = pa_to_pte(pa) | leaf_perm | PTE_V;
 }
 
 unsigned long vm_make_satp(pagetable_t pt) {
@@ -1981,6 +1974,109 @@ void vm_init(void) {
     }
 
     print_str("vm scaffold init done\n");
+}
+
+void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm) {
+    pte_t *l2 = (pte_t *)pt;
+    pte_t *l1;
+    pte_t *l0;
+    unsigned long leaf_perm = perm | PTE_A;
+
+    if (perm & PTE_W) {
+        leaf_perm |= PTE_D;
+    }
+
+    if (!(l2[vpn2(va)] & PTE_V)) {
+        print_str("[KERNEL] vm_map_page: missing l1 table\n");
+        return;
+    }
+    l1 = (pte_t *)pte_to_pa(l2[vpn2(va)]);
+
+    if (!(l1[vpn1(va)] & PTE_V)) {
+        print_str("[KERNEL] vm_map_page: missing l0 table\n");
+        return;
+    }
+    l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
+
+    l0[vpn0(va)] = pa_to_pte(pa) | leaf_perm | PTE_V;
+}
+
+pte_t *vm_walk(pagetable_t pt, unsigned long va) {
+    pte_t *l2 = (pte_t *)pt;
+    pte_t *l1;
+    pte_t *l0;
+
+    if (!pt) {
+        return 0;
+    }
+
+    if (!(l2[vpn2(va)] & PTE_V)) {
+        return 0;
+    }
+    l1 = (pte_t *)pte_to_pa(l2[vpn2(va)]);
+
+    if (!(l1[vpn1(va)] & PTE_V)) {
+        return 0;
+    }
+    l0 = (pte_t *)pte_to_pa(l1[vpn1(va)]);
+
+    return &l0[vpn0(va)]; // 返回的不是 PA，而是 PTE 指针
+}
+
+int vm_handle_user_page_fault(int pid, pagetable_t pt, unsigned long scause, unsigned long fault_va) {
+    user_layout_t layout;
+    unsigned long va_page;
+    unsigned long page_off;
+    unsigned long pa;
+    pte_t *pte;
+
+    if (pid < 0 || pid >= PROC_NUM || !pt) {
+        return -1;
+    }
+
+    if (scause != 13 && scause != 15) {
+        return -1;
+    }
+
+    vm_user_layout_init(&layout);
+
+    // fault_va 就是报错的stval
+    if (!vm_user_is_demand_range(&layout, fault_va)) {
+        return -1;
+    }
+
+    va_page = page_down(fault_va);
+    page_off = va_page - USER_TEXT_BASE;
+
+    if (page_off >= USER_IMAGE_MAX_SIZE) {
+        return -1;
+    }
+
+    // 已经有映射或者权限问题 就不做
+    pte = vm_walk(pt, va_page);
+    if (pte && (*pte & PTE_V)) {
+        return -1;
+    }
+
+    /*
+     * Phase-1 backing:
+     * still use the pre-reserved user_image_pages[pid] as physical backing.
+     * vm_init/vm_make_user_pagetable already zero this area,
+     * so BSS pages naturally come in as zero-filled.
+     */
+    pa = (unsigned long)user_image_pages[pid] + page_off;
+
+    vm_map_page(pt, va_page, pa, PTE_R | PTE_W | PTE_U);
+    // 刷新 TLB
+    sfence_vma();
+
+    print_str("[KERNEL] demand map: pid=");
+    print_hex((unsigned long)pid);
+    print_str(" va=");
+    print_hex(va_page);
+    print_str("\n");
+
+    return 0;
 }
 
 pagetable_t vm_make_user_pagetable(int pid) {
@@ -2022,48 +2118,46 @@ pagetable_t vm_make_user_pagetable(int pid) {
         user_image_pages[pid][i] = 0;
     }
 
-    stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
+    user_layout_t layout;
+    vm_user_layout_init(&layout);
 
     l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
     l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
-    l1_low[vpn1(stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
+    l1_low[vpn1(layout.stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
 
-    image_size = (unsigned long)(__userdata_end - __usertext_start);
-    image_map_size = page_up((unsigned long)(__userbss_end - __usertext_start));
-
-    rodata_off = (unsigned long)(__userrodata_start - __usertext_start);
-    data_off = (unsigned long)(__userdata_start - __usertext_start);
-    bss_off = (unsigned long)(__userbss_start - __usertext_start);
-    bss_end_off = (unsigned long)(__userbss_end - __usertext_start);
-
-    if (image_map_size > USER_IMAGE_MAX_SIZE) {
+    if (layout.full_image_size > USER_IMAGE_MAX_SIZE) {
         print_str("[KERNEL] user image too large\n");
         return 0;
     }
 
-    for (unsigned long i = 0; i < image_size; i++) {
+    for (unsigned long i = 0; i < layout.image_copy_size; i++) {
         user_image_pages[pid][i] = __usertext_start[i];
     }
 
-    for (unsigned long off = 0; off < image_map_size; off += PAGE_SIZE) {
-        unsigned long perm;
+    /*
+     * Phase-1 split:
+     *   eager map  = text / rodata / data
+     *   lazy map   = bss .. demand_end
+     *
+     * So here we only pre-map the eager portion.
+     */
+    for (unsigned long off = 0; off < layout.eager_map_size; off += PAGE_SIZE) {
+        unsigned long va = USER_TEXT_BASE + off;
+        unsigned long perm = vm_user_image_perm(&layout, va);
 
-        if (off < rodata_off) {
-            perm = PTE_R | PTE_X | PTE_U;
-        } else if (off < data_off) {
-            perm = PTE_R | PTE_U;
-        } else {
-            perm = PTE_R | PTE_W | PTE_U; // bss
+        if (perm == 0) {
+            print_str("[KERNEL] unexpected eager user image va perm lookup miss\n");
+            return 0;
         }
 
         vm_map_page((pagetable_t)l2,
-                    USER_TEXT_BASE + off,
+                    va,
                     (unsigned long)user_image_pages[pid] + off,
                     perm);
     }
 
     vm_map_page((pagetable_t)l2,
-                stack_bottom,
+                layout.stack_bottom,
                 (unsigned long)user_stack_pages[pid],
                 PTE_R | PTE_W | PTE_U);
 
@@ -2084,6 +2178,62 @@ pagetable_t vm_make_user_pagetable(int pid) {
 
     return (pagetable_t)l2;
 }
+
+void vm_user_layout_init(user_layout_t *l) {
+    if (!l) {
+        return;
+    }
+
+    l->text_start   = USER_TEXT_BASE;
+    l->text_end     = USER_TEXT_BASE + (unsigned long)(__usertext_end - __usertext_start);
+
+    l->rodata_start = USER_TEXT_BASE + (unsigned long)(__userrodata_start - __usertext_start);
+    l->rodata_end   = USER_TEXT_BASE + (unsigned long)(__userrodata_end - __usertext_start);
+
+    l->data_start   = USER_TEXT_BASE + (unsigned long)(__userdata_start - __usertext_start);
+    l->data_end     = USER_TEXT_BASE + (unsigned long)(__userdata_end - __usertext_start);
+
+    l->bss_start    = USER_TEXT_BASE + (unsigned long)(__userbss_start - __usertext_start);
+    l->bss_end      = USER_TEXT_BASE + (unsigned long)(__userbss_end - __usertext_start);
+
+    l->image_copy_size = (unsigned long)(__userdata_end - __usertext_start);
+    l->eager_map_size  = page_up((unsigned long)(__userdata_end - __usertext_start));
+    l->full_image_size = page_up((unsigned long)(__userbss_end - __usertext_start));
+
+    /*
+    * Phase-1 demand paging policy:
+    *   eager  = text / rodata / data
+    *   lazy   = bss .. USER_TEXT_BASE + USER_IMAGE_MAX_SIZE
+    */
+    l->demand_start = l->bss_start;
+    l->demand_end   = USER_TEXT_BASE + USER_IMAGE_MAX_SIZE;
+
+    l->stack_top    = USER_STACK_TOP;
+    l->stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
+}
+
+int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long end) {
+    return va >= start && va < end;
+}
+int vm_user_is_demand_range(const user_layout_t *layout, unsigned long va) {
+    return vm_user_range_contains(va, layout->demand_start, layout->demand_end);
+}
+
+unsigned long vm_user_image_perm(const user_layout_t *layout, unsigned long va) {
+    if (vm_user_range_contains(va, layout->text_start, layout->rodata_start)) {
+        return PTE_R | PTE_X | PTE_U;
+    }
+    if (vm_user_range_contains(va, layout->rodata_start, layout->data_start)) {
+        return PTE_R | PTE_U;
+    }
+    if (vm_user_range_contains(va, layout->data_start, layout->bss_end)) {
+        return PTE_R | PTE_W | PTE_U;
+    }
+
+    return 0;
+}
+
+
 ```
 
 ### vm.h
@@ -2109,12 +2259,70 @@ pagetable_t vm_make_user_pagetable(int pid) {
 typedef unsigned long pte_t;
 typedef unsigned long pagetable_t;
 
+typedef struct {
+    unsigned long image_copy_size;    /* text + rodata + data */
+    unsigned long eager_map_size;     /* eager mapped: text + rodata + data */
+    unsigned long full_image_size;    /* full image span: text + rodata + data + bss */
+
+    unsigned long text_start;
+    unsigned long text_end;
+
+    unsigned long rodata_start;
+    unsigned long rodata_end;
+
+    unsigned long data_start;
+    unsigned long data_end;
+
+    unsigned long bss_start;
+    unsigned long bss_end;
+
+    unsigned long demand_start;       /* phase-1 lazy region start */
+    unsigned long demand_end;         /* phase-1 lazy region end */
+
+    unsigned long stack_bottom;
+    unsigned long stack_top;
+} user_layout_t;
+
+typedef enum {
+    VM_ACCESS_READ = 1,
+    VM_ACCESS_WRITE = 2,
+    VM_ACCESS_EXEC = 4,
+} vm_access_t;
+
 void vm_init(void);
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm);
 pagetable_t vm_make_user_pagetable(int pid);
 unsigned long vm_make_satp(pagetable_t pt);
 void vm_switch_to_user(pagetable_t pt);
 
+void vm_user_layout_init(user_layout_t *layout);
+int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long end);
+unsigned long vm_user_image_perm(const user_layout_t *layout, unsigned long va);
+int vm_user_is_demand_range(const user_layout_t *layout, unsigned long va);
+
+pte_t *vm_walk(pagetable_t pt, unsigned long va);
+
+/*
+ * Pure query:
+ *   return 0 on success and store translated PA in *pa_out
+ *   return -1 if unmapped / permission denied / invalid
+ */
+int vm_translate_user(pagetable_t pt,
+                      unsigned long va,
+                      vm_access_t access,
+                      unsigned long *pa_out);
+
+/*
+ * Stateful ensure:
+ *   if already accessible -> success
+ *   if lazily mappable   -> map and then success
+ *   else                 -> fail
+ */
+int vm_ensure_user_access(int pid,
+                          pagetable_t pt,
+                          unsigned long va,
+                          vm_access_t access,
+                          unsigned long *pa_out);
 #endif
 ```
 
