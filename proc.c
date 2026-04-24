@@ -11,10 +11,10 @@ struct proc procs[PROC_NUM];
 struct proc *current = 0;
 static user_image_desc boot_images[PROC_NUM];
 
-static void init_proc_context(struct proc *p, int pid, const user_image_desc *image) {
+static void proc_basic_init(struct proc *p, int pid) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
-    p->block_reason = PROC_BLOCK_NONE;   
+    p->block_reason = PROC_BLOCK_NONE;
 
     p->wakeup_tick = 0;
 
@@ -24,7 +24,7 @@ static void init_proc_context(struct proc *p, int pid, const user_image_desc *im
     p->exit_code = 0;
     p->wait_status_uaddr = 0;
 
-    p->user_pagetable = vm_make_user_pagetable(pid, image);
+    p->user_pagetable = 0;
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -34,12 +34,6 @@ static void init_proc_context(struct proc *p, int pid, const user_image_desc *im
     p->scratch.kstack_top = (unsigned long)(p->kstack + KSTACK_SIZE);
 
     p->tf.ra = 0;
-
-    /*
-     * VM-enabled stage:
-     * user code still runs at its current linked high virtual address,
-     * but user stack now uses a dedicated user virtual address.
-     */
     p->tf.sp = USER_STACK_TOP;
     p->tf.gp = 0;
     p->tf.tp = 0;
@@ -75,7 +69,31 @@ static void init_proc_context(struct proc *p, int pid, const user_image_desc *im
     p->tf.t5 = 0;
     p->tf.t6 = 0;
 
+    p->tf.sepc = 0;
+}
+/*
+ * Phase-1 image loader:
+ * - builds a user pagetable from a static image descriptor
+ * - sets initial user entry (sepc)
+ * - sets initial user stack pointer
+ *
+ * This is not exec yet.
+ * It is the first explicit "load image into proc" step.
+ */
+static int proc_load_image(struct proc *p, int pid, const user_image_desc *image) {
+    if (!p || !image) {
+        return -1;
+    }
+
+    p->user_pagetable = vm_make_user_pagetable(pid, image);
+    if (!p->user_pagetable) {
+        return -1;
+    }
+
+    p->tf.sp = USER_STACK_TOP;
     p->tf.sepc = USER_TEXT_BASE + image->entry_offset;
+
+    return 0;
 }
 
 void proc_init(void) {
@@ -87,8 +105,18 @@ void proc_init(void) {
                                     "user1",
                                     (unsigned long)user_entry2 - (unsigned long)__usertext_start);
 
-    init_proc_context(&procs[0], 0, &boot_images[0]);
-    init_proc_context(&procs[1], 1, &boot_images[1]);
+    proc_basic_init(&procs[0], 0);
+    proc_basic_init(&procs[1], 1);
+
+    if (proc_load_image(&procs[0], 0, &boot_images[0]) < 0) {
+        print_str("[KERNEL] failed to load boot image user0\n");
+        while (1) {}
+    }
+
+    if (proc_load_image(&procs[1], 1, &boot_images[1]) < 0) {
+        print_str("[KERNEL] failed to load boot image user1\n");
+        while (1) {}
+    }
 
     current = &procs[0];
     current->state = PROC_RUNNING;
