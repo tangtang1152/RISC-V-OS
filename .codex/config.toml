@@ -1,0 +1,3 @@
+﻿[mcp_servers.mempalace]
+command = "C:/Python312/python.exe"
+args = ["-m", "mempalace.mcp_server", "--palace", "D:\\dev\\_mempalace"]

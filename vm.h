@@ -41,6 +41,12 @@ typedef struct {
     unsigned long stack_top;
 } user_layout_t;
 
+typedef struct {
+    const char *name;
+    unsigned long entry_offset;
+    user_layout_t layout;
+} user_image_desc;
+
 typedef enum {
     VM_ACCESS_READ = 1,
     VM_ACCESS_WRITE = 2,
@@ -49,11 +55,15 @@ typedef enum {
 
 void vm_init(void);
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm);
-pagetable_t vm_make_user_pagetable(int pid);
+pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image);
+
 unsigned long vm_make_satp(pagetable_t pt);
 void vm_switch_to_user(pagetable_t pt);
 
 void vm_user_layout_init(user_layout_t *layout);
+void vm_build_static_user_image_desc(user_image_desc *image,
+                                     const char *name,
+                                     unsigned long entry_offset);
 int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long end);
 unsigned long vm_user_image_perm(const user_layout_t *layout, unsigned long va);
 int vm_user_is_demand_range(const user_layout_t *layout, unsigned long va);

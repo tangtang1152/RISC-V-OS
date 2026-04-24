@@ -9,8 +9,9 @@ extern char __usertext_start[];
 
 struct proc procs[PROC_NUM];
 struct proc *current = 0;
+static user_image_desc boot_images[PROC_NUM];
 
-static void init_proc_context(struct proc *p, int pid, unsigned long entry_offset) {
+static void init_proc_context(struct proc *p, int pid, const user_image_desc *image) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
     p->block_reason = PROC_BLOCK_NONE;   
@@ -23,7 +24,7 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry_offse
     p->exit_code = 0;
     p->wait_status_uaddr = 0;
 
-    p->user_pagetable = vm_make_user_pagetable(pid);
+    p->user_pagetable = vm_make_user_pagetable(pid, image);
 
     p->scratch.user_t0 = 0;
     p->scratch.user_t1 = 0;
@@ -74,12 +75,20 @@ static void init_proc_context(struct proc *p, int pid, unsigned long entry_offse
     p->tf.t5 = 0;
     p->tf.t6 = 0;
 
-    p->tf.sepc = USER_TEXT_BASE + entry_offset;
+    p->tf.sepc = USER_TEXT_BASE + image->entry_offset;
 }
 
 void proc_init(void) {
-    init_proc_context(&procs[0], 0, (unsigned long)user_entry - (unsigned long)__usertext_start);
-    init_proc_context(&procs[1], 1, (unsigned long)user_entry2 - (unsigned long)__usertext_start);
+    vm_build_static_user_image_desc(&boot_images[0],
+                                    "user0",
+                                    (unsigned long)user_entry - (unsigned long)__usertext_start);
+
+    vm_build_static_user_image_desc(&boot_images[1],
+                                    "user1",
+                                    (unsigned long)user_entry2 - (unsigned long)__usertext_start);
+
+    init_proc_context(&procs[0], 0, &boot_images[0]);
+    init_proc_context(&procs[1], 1, &boot_images[1]);
 
     current = &procs[0];
     current->state = PROC_RUNNING;
@@ -117,6 +126,7 @@ void schedule(void) {
         unsigned long s = r_sstatus();
         w_sstatus(s | (1UL << 1));   // SIE=1
         // S-mode中断还是依赖U-mode的scratch来保存当前进程的上下文 
+        w_sscratch((unsigned long)&current->scratch);
         w_sscratch((unsigned long)&current->scratch);
         asm volatile("wfi");
         w_sstatus(s);                // 恢复原值

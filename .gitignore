@@ -1,6 +1,6 @@
-kernel.elf
-kernel.bin
-kernel.dump
-kernel.nm
-qemu-int.log
+*.elf
+*.bin
+*.dump
+*.nm
+*.log
 project-files.md
