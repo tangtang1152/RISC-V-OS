@@ -416,6 +416,7 @@ void vm_build_static_user_image_desc(user_image_desc *image,
     }
 
     image->name = name;
+    image->kind = USER_IMAGE_STATIC_LINKED;
     image->entry_offset = entry_offset;
     vm_user_layout_init(&image->layout);
 }

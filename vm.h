@@ -41,8 +41,12 @@ typedef struct {
     unsigned long stack_top;
 } user_layout_t;
 
+typedef enum {
+    USER_IMAGE_STATIC_LINKED = 0,
+} user_image_kind_t;
 typedef struct {
     const char *name;
+    user_image_kind_t kind;
     unsigned long entry_offset;
     user_layout_t layout;
 } user_image_desc;

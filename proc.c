@@ -73,11 +73,12 @@ static void proc_basic_init(struct proc *p, int pid) {
 }
 /*
  * Phase-1 image loader:
- * - builds a user pagetable from a static image descriptor
- * - sets initial user entry (sepc)
- * - sets initial user stack pointer
+ * - accepts a user image descriptor chosen by proc bootstrap
+ * - currently supports only static linked boot images
+ * - builds a user pagetable from the image layout
+ * - sets initial user entry (sepc) and user stack pointer (sp)
  *
- * This is not exec yet.
+ * This is still not exec yet.
  * It is the first explicit "load image into proc" step.
  */
 static int proc_load_image(struct proc *p, int pid, const user_image_desc *image) {
@@ -85,12 +86,19 @@ static int proc_load_image(struct proc *p, int pid, const user_image_desc *image
         return -1;
     }
 
+    switch (image->kind) {
+        case USER_IMAGE_STATIC_LINKED:
+            break;
+        default:
+            return -1;
+    }
+
     p->user_pagetable = vm_make_user_pagetable(pid, image);
     if (!p->user_pagetable) {
         return -1;
     }
 
-    p->tf.sp = USER_STACK_TOP;
+    p->tf.sp = image->layout.stack_top;
     p->tf.sepc = USER_TEXT_BASE + image->entry_offset;
 
     return 0;
