@@ -11,6 +11,53 @@ struct proc procs[PROC_NUM];
 struct proc *current = 0;
 static user_image_desc boot_images[PROC_NUM];
 
+static int proc_validate_image(const user_image_desc *image) {
+    if (!image) {
+        return -1;
+    }
+
+    if (!image->name) {
+        return -1;
+    }
+
+    switch (image->kind) {
+        case USER_IMAGE_STATIC_LINKED:
+            break;
+        default:
+            return -1;
+    }
+
+    if (!image->source_base) {
+        return -1;
+    }
+
+    if (image->source_size == 0) {
+        return -1;
+    }
+
+    if (image->source_size != image->layout.image_copy_size) {
+        return -1;
+    }
+
+    if (image->layout.stack_top != USER_STACK_TOP) {
+        return -1;
+    }
+
+    if (image->entry_offset >= image->layout.eager_map_size) {
+        return -1;
+    }
+
+    return 0;
+}
+static void proc_init_user_context_from_image(struct proc *p,
+                                              const user_image_desc *image) {
+    if (!p || !image) {
+        return;
+    }
+
+    p->tf.sp = image->layout.stack_top;
+    p->tf.sepc = USER_TEXT_BASE + image->entry_offset;
+}
 static void proc_basic_init(struct proc *p, int pid) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
@@ -72,27 +119,21 @@ static void proc_basic_init(struct proc *p, int pid) {
     p->tf.sepc = 0;
 }
 /*
- * Phase-1 image loader:
- * - accepts a user image descriptor chosen by proc bootstrap
- * - currently supports only static linked boot images
- * - builds a user pagetable from the image layout
- * - sets initial user entry (sepc) and user stack pointer (sp)
+ * Phase-1 proc image loader:
+ * - validates an image descriptor chosen by bootstrap logic
+ * - delegates address-space construction to VM
+ * - initializes first-entry user context (sepc/sp) from image semantics
  *
- * This is still not exec yet.
- * It is the first explicit "load image into proc" step.
-
- * - delegates actual static image source mapping to vm_make_user_pagetable()
+ * This is still not exec yet,
+ * but it is now the single entry point for "load this image into this proc".
  */
 static int proc_load_image(struct proc *p, int pid, const user_image_desc *image) {
-    if (!p || !image) {
+    if (!p) {
         return -1;
     }
 
-    switch (image->kind) {
-        case USER_IMAGE_STATIC_LINKED:
-            break;
-        default:
-            return -1;
+    if (proc_validate_image(image) < 0) {
+        return -1;
     }
 
     p->user_pagetable = vm_make_user_pagetable(pid, image);
@@ -100,9 +141,7 @@ static int proc_load_image(struct proc *p, int pid, const user_image_desc *image
         return -1;
     }
 
-    p->tf.sp = image->layout.stack_top;
-    p->tf.sepc = USER_TEXT_BASE + image->entry_offset;
-
+    proc_init_user_context_from_image(p, image);
     return 0;
 }
 
