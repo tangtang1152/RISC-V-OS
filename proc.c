@@ -165,7 +165,6 @@ void schedule(void) {
         w_sstatus(s | (1UL << 1));   // SIE=1
         // S-mode中断还是依赖U-mode的scratch来保存当前进程的上下文 
         w_sscratch((unsigned long)&current->scratch);
-        w_sscratch((unsigned long)&current->scratch);
         asm volatile("wfi");
         w_sstatus(s);                // 恢复原值
     }

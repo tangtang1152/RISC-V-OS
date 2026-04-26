@@ -215,14 +215,90 @@ pte_t *vm_walk(pagetable_t pt, unsigned long va) {
     return &l0[vpn0(va)]; // 返回的不是 PA，而是 PTE 指针
 }
 
+static int vm_copy_image_source(int pid, const user_image_desc *image) {
+    if (pid < 0 || pid >= PROC_NUM || !image || !image->source_base) {
+        return -1;
+    }
+
+    if (image->source_size > USER_IMAGE_MAX_SIZE) {
+        print_str("[KERNEL] user image too large\n");
+        return -1;
+    }
+
+    for (unsigned long i = 0; i < image->source_size; i++) {
+        user_image_pages[pid][i] = image->source_base[i];
+    }
+
+    return 0;
+}
+static int vm_map_image_eager(pagetable_t pt, int pid, const user_layout_t *layout) {
+    if (!pt || pid < 0 || pid >= PROC_NUM || !layout) {
+        return -1;
+    }
+
+    for (unsigned long off = 0; off < layout->eager_map_size; off += PAGE_SIZE) {
+        unsigned long va = USER_TEXT_BASE + off;
+        unsigned long perm = vm_user_image_perm(layout, va);
+
+        if (perm == 0) {
+            return -1;
+        }
+
+        vm_map_page(pt,
+                    va,
+                    (unsigned long)user_image_pages[pid] + off,
+                    perm);
+    }
+
+    return 0;
+}
+static int vm_map_user_stack(pagetable_t pt, int pid, const user_layout_t *layout) {
+    if (!pt || pid < 0 || pid >= PROC_NUM || !layout) {
+        return -1;
+    }
+
+    vm_map_page(pt,
+                layout->stack_bottom,
+                (unsigned long)user_stack_pages[pid],
+                PTE_R | PTE_W | PTE_U);
+
+    return 0;
+}
+static int vm_map_kernel_window(pagetable_t pt,
+                                pte_t *l2,
+                                pte_t *l1_kernel,
+                                pte_t *l0_kernel[KERNEL_L0_TABLES]) {
+    if (!pt || !l2 || !l1_kernel) {
+        return -1;
+    }
+
+    l2[vpn2(KERNEL_MAP_BASE)] = pa_to_pte((unsigned long)l1_kernel) | PTE_V;
+
+    for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
+        unsigned long chunk_base = KERNEL_MAP_BASE + (unsigned long)t * KERNEL_L0_SPAN;
+
+        l1_kernel[vpn1(chunk_base)] = pa_to_pte((unsigned long)l0_kernel[t]) | PTE_V;
+
+        for (unsigned long off = 0; off < KERNEL_L0_SPAN; off += PAGE_SIZE) {
+            unsigned long va = chunk_base + off;
+            unsigned long pa = chunk_base + off;
+
+            vm_map_page(pt, va, pa, PTE_R | PTE_W | PTE_X);
+        }
+    }
+
+    return 0;
+}
 /*
- * Phase-1 static image mapper:
- * - consumes a user_image_desc selected by higher-level proc/image logic
- * - copies the file-backed source region into per-proc backing memory
- * - eagerly maps text / rodata / data
- * - leaves bss / future heap reserve for lazy mapping
+ * Phase-1 static image loader control flow:
+ *   1) validate image descriptor and source
+ *   2) copy file-backed image source into per-proc backing memory
+ *   3) eagerly map text / rodata / data
+ *   4) map user stack
+ *   5) map shared kernel window
  *
- * This is still not a general ELF loader yet.
+ * Lazy bss / heap reserve is not mapped here.
+ * It is resolved later via vm_ensure_user_access().
  */
 pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image) {
     pte_t *l2;
@@ -262,6 +338,10 @@ pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image) {
     }
     layout = &image->layout;
 
+    l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
+    l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
+    l1_low[vpn1(layout->stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
+
     if (!image->source_base) {
         print_str("[KERNEL] user image source is null\n");
         return 0;
@@ -271,59 +351,24 @@ pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image) {
         return 0;
     }
 
-    l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
-    l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
-    l1_low[vpn1(layout->stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
-
-    if (layout->full_image_size > USER_IMAGE_MAX_SIZE) {
-        print_str("[KERNEL] user image too large\n");
+    if (vm_copy_image_source(pid, image) < 0) {
+        print_str("[KERNEL] failed to copy user image source\n");
         return 0;
     }
 
-    for (unsigned long i = 0; i < image->source_size; i++) {
-        user_image_pages[pid][i] = image->source_base[i];
+    if (vm_map_image_eager((pagetable_t)l2, pid, layout) < 0) {
+        print_str("[KERNEL] failed to map eager user image\n");
+        return 0;
     }
 
-    /*
-     * Phase-1 split:
-     *   eager map  = text / rodata / data
-     *   lazy map   = bss .. demand_end
-     *
-     * So here we only pre-map the eager portion.
-     */
-    for (unsigned long off = 0; off < layout->eager_map_size; off += PAGE_SIZE) {
-        unsigned long va = USER_TEXT_BASE + off;
-        unsigned long perm = vm_user_image_perm(layout, va);
-
-        if (perm == 0) {
-            print_str("[KERNEL] unexpected eager user image va perm lookup miss\n");
-            return 0;
-        }
-
-        vm_map_page((pagetable_t)l2,
-                    va,
-                    (unsigned long)user_image_pages[pid] + off,
-                    perm);
+    if (vm_map_user_stack((pagetable_t)l2, pid, layout) < 0) {
+        print_str("[KERNEL] failed to map user stack\n");
+        return 0;
     }
 
-    vm_map_page((pagetable_t)l2,
-                layout->stack_bottom,
-                (unsigned long)user_stack_pages[pid],
-                PTE_R | PTE_W | PTE_U);
-
-    l2[vpn2(KERNEL_MAP_BASE)] = pa_to_pte((unsigned long)l1_kernel) | PTE_V;
-
-    for (unsigned long t = 0; t < KERNEL_L0_TABLES; t++) {
-        unsigned long chunk_base = KERNEL_MAP_BASE + (unsigned long)t * KERNEL_L0_SPAN;
-
-        l1_kernel[vpn1(chunk_base)] = pa_to_pte((unsigned long)l0_kernel[t]) | PTE_V;
-
-        for (unsigned long off = 0; off < KERNEL_L0_SPAN; off += PAGE_SIZE) {
-            unsigned long va = chunk_base + off;
-            unsigned long pa = chunk_base + off;
-
-            vm_map_page((pagetable_t)l2, va, pa, PTE_R | PTE_W | PTE_X);
-        }
+    if (vm_map_kernel_window((pagetable_t)l2, l2, l1_kernel, l0_kernel) < 0) {
+        print_str("[KERNEL] failed to map kernel window\n");
+        return 0;
     }
 
     return (pagetable_t)l2;

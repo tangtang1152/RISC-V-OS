@@ -59,6 +59,7 @@ typedef struct {
     unsigned long entry_offset;
     user_layout_t layout;
 } user_image_desc;
+
 typedef enum {
     VM_ACCESS_READ = 1,
     VM_ACCESS_WRITE = 2,
