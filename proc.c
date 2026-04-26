@@ -145,6 +145,27 @@ static int proc_load_image(struct proc *p, int pid, const user_image_desc *image
     return 0;
 }
 
+/*
+ * Boot-time proc creation helper:
+ * - initializes the proc container
+ * - loads the chosen image into that proc
+ *
+ * This is intentionally thin.
+ * It exists to make boot-time creation look closer to future exec-related paths.
+ */
+static int proc_create_with_image(struct proc *p, int pid, const user_image_desc *image) {
+    if (!p) {
+        return -1;
+    }
+
+    proc_basic_init(p, pid);
+
+    if (proc_load_image(p, pid, image) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
 void proc_init(void) {
     vm_build_static_user_image_desc(&boot_images[0],
                                     "user0",
@@ -154,16 +175,13 @@ void proc_init(void) {
                                     "user1",
                                     (unsigned long)user_entry2 - (unsigned long)__usertext_start);
 
-    proc_basic_init(&procs[0], 0);
-    proc_basic_init(&procs[1], 1);
-
-    if (proc_load_image(&procs[0], 0, &boot_images[0]) < 0) {
-        print_str("[KERNEL] failed to load boot image user0\n");
+    if (proc_create_with_image(&procs[0], 0, &boot_images[0]) < 0) {
+        print_str("[KERNEL] failed to create boot proc user0\n");
         while (1) {}
     }
 
-    if (proc_load_image(&procs[1], 1, &boot_images[1]) < 0) {
-        print_str("[KERNEL] failed to load boot image user1\n");
+    if (proc_create_with_image(&procs[1], 1, &boot_images[1]) < 0) {
+        print_str("[KERNEL] failed to create boot proc user1\n");
         while (1) {}
     }
 
