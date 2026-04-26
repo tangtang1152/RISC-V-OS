@@ -231,23 +231,30 @@ static int vm_copy_image_source(int pid, const user_image_desc *image) {
 
     return 0;
 }
-static int vm_map_image_eager(pagetable_t pt, int pid, const user_layout_t *layout) {
-    if (!pt || pid < 0 || pid >= PROC_NUM || !layout) {
+/*
+ * Phase-1 eager segment mapper:
+ * - maps only explicit file-backed eager segments
+ * - current static image segments are: text, rodata, data
+ * - bss is intentionally excluded and remains lazy-mapped
+ */
+static int vm_map_image_eager(pagetable_t pt, int pid, const user_image_desc *image) {
+    if (!pt || pid < 0 || pid >= PROC_NUM || !image) {
         return -1;
     }
 
-    for (unsigned long off = 0; off < layout->eager_map_size; off += PAGE_SIZE) {
-        unsigned long va = USER_TEXT_BASE + off;
-        unsigned long perm = vm_user_image_perm(layout, va);
+    for (unsigned long s = 0; s < image->segment_count; s++) {
+        const user_segment_desc *seg = &image->segments[s];
+        unsigned long seg_page_start = page_down(seg->va_start);
+        unsigned long seg_page_end = page_up(seg->va_start + seg->size);
 
-        if (perm == 0) {
-            return -1;
+        for (unsigned long va = seg_page_start; va < seg_page_end; va += PAGE_SIZE) {
+            unsigned long off = va - USER_TEXT_BASE;
+
+            vm_map_page(pt,
+                        va,
+                        (unsigned long)user_image_pages[pid] + off,
+                        seg->perm);
         }
-
-        vm_map_page(pt,
-                    va,
-                    (unsigned long)user_image_pages[pid] + off,
-                    perm);
     }
 
     return 0;
@@ -356,8 +363,8 @@ pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image) {
         return 0;
     }
 
-    if (vm_map_image_eager((pagetable_t)l2, pid, layout) < 0) {
-        print_str("[KERNEL] failed to map eager user image\n");
+    if (vm_map_image_eager((pagetable_t)l2, pid, image) < 0) {
+        print_str("[KERNEL] failed to map eager user image segments\n");
         return 0;
     }
 
@@ -471,6 +478,35 @@ void vm_user_layout_init(user_layout_t *l) {
     l->stack_top    = USER_STACK_TOP;
     l->stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
 }
+static void vm_build_static_image_segments(user_image_desc *image) {
+    user_layout_t *l;
+
+    if (!image) {
+        return;
+    }
+
+    l = &image->layout;
+
+    image->segment_count = 3;
+
+    image->segments[0].name = "text";
+    image->segments[0].va_start = l->text_start;
+    image->segments[0].size = l->rodata_start - l->text_start;
+    image->segments[0].perm = PTE_R | PTE_X | PTE_U;
+    image->segments[0].src_offset = 0;
+
+    image->segments[1].name = "rodata";
+    image->segments[1].va_start = l->rodata_start;
+    image->segments[1].size = l->data_start - l->rodata_start;
+    image->segments[1].perm = PTE_R | PTE_U;
+    image->segments[1].src_offset = l->rodata_start - USER_TEXT_BASE;
+
+    image->segments[2].name = "data";
+    image->segments[2].va_start = l->data_start;
+    image->segments[2].size = l->data_end - l->data_start;
+    image->segments[2].perm = PTE_R | PTE_W | PTE_U;
+    image->segments[2].src_offset = l->data_start - USER_TEXT_BASE;
+}
 void vm_build_static_user_image_desc(user_image_desc *image,
                                      const char *name,
                                      unsigned long entry_offset) {
@@ -486,6 +522,8 @@ void vm_build_static_user_image_desc(user_image_desc *image,
 
     image->source_base = (const unsigned char *)__usertext_start;
     image->source_size = image->layout.image_copy_size;
+
+    vm_build_static_image_segments(image);
 }
 
 int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long end) {

@@ -46,6 +46,14 @@ typedef enum {
 } user_image_kind_t;
 typedef struct {
     const char *name;
+    unsigned long va_start;
+    unsigned long size;
+    unsigned long perm;
+    unsigned long src_offset;
+} user_segment_desc;
+#define USER_IMAGE_MAX_SEGMENTS 3
+typedef struct {
+    const char *name;
     user_image_kind_t kind;
 
     /*
@@ -58,6 +66,9 @@ typedef struct {
 
     unsigned long entry_offset;
     user_layout_t layout;
+
+    user_segment_desc segments[USER_IMAGE_MAX_SEGMENTS];
+    unsigned long segment_count;
 } user_image_desc;
 
 typedef enum {
