@@ -215,6 +215,15 @@ pte_t *vm_walk(pagetable_t pt, unsigned long va) {
     return &l0[vpn0(va)]; // 返回的不是 PA，而是 PTE 指针
 }
 
+/*
+ * Phase-1 static image mapper:
+ * - consumes a user_image_desc selected by higher-level proc/image logic
+ * - copies the file-backed source region into per-proc backing memory
+ * - eagerly maps text / rodata / data
+ * - leaves bss / future heap reserve for lazy mapping
+ *
+ * This is still not a general ELF loader yet.
+ */
 pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image) {
     pte_t *l2;
     pte_t *l1_low;
@@ -253,6 +262,15 @@ pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image) {
     }
     layout = &image->layout;
 
+    if (!image->source_base) {
+        print_str("[KERNEL] user image source is null\n");
+        return 0;
+    }
+    if (image->source_size != layout->image_copy_size) {
+        print_str("[KERNEL] user image source size mismatch\n");
+        return 0;
+    }
+
     l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
     l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
     l1_low[vpn1(layout->stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
@@ -262,8 +280,8 @@ pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image) {
         return 0;
     }
 
-    for (unsigned long i = 0; i < layout->image_copy_size; i++) {
-        user_image_pages[pid][i] = __usertext_start[i];
+    for (unsigned long i = 0; i < image->source_size; i++) {
+        user_image_pages[pid][i] = image->source_base[i];
     }
 
     /*
@@ -418,7 +436,11 @@ void vm_build_static_user_image_desc(user_image_desc *image,
     image->name = name;
     image->kind = USER_IMAGE_STATIC_LINKED;
     image->entry_offset = entry_offset;
+
     vm_user_layout_init(&image->layout);
+
+    image->source_base = (const unsigned char *)__usertext_start;
+    image->source_size = image->layout.image_copy_size;
 }
 
 int vm_user_range_contains(unsigned long va, unsigned long start, unsigned long end) {

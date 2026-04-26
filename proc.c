@@ -80,6 +80,8 @@ static void proc_basic_init(struct proc *p, int pid) {
  *
  * This is still not exec yet.
  * It is the first explicit "load image into proc" step.
+
+ * - delegates actual static image source mapping to vm_make_user_pagetable()
  */
 static int proc_load_image(struct proc *p, int pid, const user_image_desc *image) {
     if (!p || !image) {

@@ -47,10 +47,18 @@ typedef enum {
 typedef struct {
     const char *name;
     user_image_kind_t kind;
+
+    /*
+     * Phase-1 static image source:
+     * file-backed part only (text + rodata + data),
+     * excluding bss which stays zero-fill / lazy-mapped.
+     */
+    const unsigned char *source_base;
+    unsigned long source_size;
+
     unsigned long entry_offset;
     user_layout_t layout;
 } user_image_desc;
-
 typedef enum {
     VM_ACCESS_READ = 1,
     VM_ACCESS_WRITE = 2,
