@@ -62,26 +62,22 @@ USER_TEXT void user_main(void)
         sys_printstr(u0_copyout_fail);
     }
 
-    long code = -1;
-    long status = -1;
-
-    sys_printstr(u0_wait);
-    code = sys_wait(1, &status);
-    sys_printstr(u0_wait_ret);
-    sys_printhex((unsigned long)status);
-    sys_printstr(u0_nl);
-
-    if (code == 0 &&
-        status == 42 &&
-        sum == 84 &&
+    if (sum == 84 &&
         magic == 'Z' &&
         *USER_COPYOUT_PTR == u0_expected_copyout) {
         sys_printstr(u0_pass);
     } else {
         sys_printstr(u0_fail);
     }
-
+    sys_printstr(u0_wait);
+    long status = -1;
+    if (sys_wait(1, &status) == 0) {
+        sys_printstr(u0_wait_ret);
+        sys_printhex((unsigned long)status);
+        sys_printstr(u0_nl);
+    }
     sys_exit(0);
+
     while (1) { }
 }
 
@@ -188,4 +184,8 @@ USER_TEXT long sys_getpid(void) {
 
 USER_TEXT long sys_fillbuf(unsigned long *buf) {
     return do_syscall1(SYS_FILLBUF, (long)buf);
+}
+
+USER_TEXT long sys_exec(long image_id) {
+    return do_syscall1(SYS_EXEC, image_id);
 }

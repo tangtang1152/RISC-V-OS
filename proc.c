@@ -11,6 +11,14 @@ struct proc procs[PROC_NUM];
 struct proc *current = 0;
 static user_image_desc boot_images[PROC_NUM];
 
+static const user_image_desc *proc_find_boot_image(int image_id) {
+    if (image_id < 0 || image_id >= PROC_NUM) {
+        return 0;
+    }
+
+    return &boot_images[image_id];
+}
+
 static int proc_validate_image(const user_image_desc *image) {
     if (!image) {
         return -1;
@@ -58,6 +66,24 @@ static void proc_init_user_context_from_image(struct proc *p,
     p->tf.sp = image->layout.stack_top;
     p->tf.sepc = USER_TEXT_BASE + image->entry_offset;
 }
+static int proc_load_image(struct proc *p, int pid, const user_image_desc *image) {
+    if (!p) {
+        return -1;
+    }
+
+    if (proc_validate_image(image) < 0) {
+        return -1;
+    }
+
+    p->user_pagetable = vm_make_user_pagetable(pid, image);
+    if (!p->user_pagetable) {
+        return -1;
+    }
+
+    proc_init_user_context_from_image(p, image);
+    return 0;
+}
+
 static void proc_basic_init(struct proc *p, int pid) {
     p->pid = pid;
     p->state = PROC_RUNNABLE;
@@ -118,41 +144,7 @@ static void proc_basic_init(struct proc *p, int pid) {
 
     p->tf.sepc = 0;
 }
-/*
- * Phase-1 proc image loader:
- * - validates an image descriptor chosen by bootstrap logic
- * - delegates address-space construction to VM
- * - initializes first-entry user context (sepc/sp) from image semantics
- *
- * This is still not exec yet,
- * but it is now the single entry point for "load this image into this proc".
- */
-static int proc_load_image(struct proc *p, int pid, const user_image_desc *image) {
-    if (!p) {
-        return -1;
-    }
 
-    if (proc_validate_image(image) < 0) {
-        return -1;
-    }
-
-    p->user_pagetable = vm_make_user_pagetable(pid, image);
-    if (!p->user_pagetable) {
-        return -1;
-    }
-
-    proc_init_user_context_from_image(p, image);
-    return 0;
-}
-
-/*
- * Boot-time proc creation helper:
- * - initializes the proc container
- * - loads the chosen image into that proc
- *
- * This is intentionally thin.
- * It exists to make boot-time creation look closer to future exec-related paths.
- */
 static int proc_create_with_image(struct proc *p, int pid, const user_image_desc *image) {
     if (!p) {
         return -1;
@@ -166,6 +158,7 @@ static int proc_create_with_image(struct proc *p, int pid, const user_image_desc
 
     return 0;
 }
+
 void proc_init(void) {
     vm_build_static_user_image_desc(&boot_images[0],
                                     "user0",
@@ -328,4 +321,17 @@ void proc_dump(void) {
     }
 
     print_str("[KERNEL] proc dump end\n");
+}
+
+const user_image_desc *proc_find_boot_image_by_id(int image_id) {
+    return proc_find_boot_image(image_id);
+}
+
+int proc_exec_current_image(int image_id) {
+    (void)image_id;
+    /*
+     * Temporarily disabled:
+     * safe exec needs allocator-backed pagetable handoff.
+     */
+    return -1;
 }

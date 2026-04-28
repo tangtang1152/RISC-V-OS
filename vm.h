@@ -44,6 +44,7 @@ typedef struct {
 typedef enum {
     USER_IMAGE_STATIC_LINKED = 0,
 } user_image_kind_t;
+
 typedef struct {
     const char *name;
     unsigned long va_start;
@@ -51,7 +52,9 @@ typedef struct {
     unsigned long perm;
     unsigned long src_offset;
 } user_segment_desc;
+
 #define USER_IMAGE_MAX_SEGMENTS 3
+
 typedef struct {
     const char *name;
     user_image_kind_t kind;

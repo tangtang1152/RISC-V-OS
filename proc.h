@@ -68,4 +68,7 @@ const char *proc_block_reason_name(int reason);
 
 void schedule(void);
 
+const user_image_desc *proc_find_boot_image_by_id(int image_id);
+int proc_exec_current_image(int image_id);
+
 #endif

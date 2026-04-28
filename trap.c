@@ -205,7 +205,7 @@ void trap_handler(struct trap_frame *tf) {
                 tf->a0 = 0;
                 break;
             
-            case SYS_PRINTSTR: {
+            case SYS_PRINTSTR: 
                 char buf[USER_STR_MAX];
 
                 if (copyinstr((const char *)tf->a0, buf, sizeof(buf)) < 0) {
@@ -216,7 +216,6 @@ void trap_handler(struct trap_frame *tf) {
                 print_str(buf);
                 tf->a0 = 0;
                 break;
-            }
 
             case SYS_PRINTHEX:
                 print_hex(tf->a0);
@@ -245,7 +244,7 @@ void trap_handler(struct trap_frame *tf) {
                 need_schedule = 1;
                 break;
 
-            case SYS_SLEEP: {
+            case SYS_SLEEP:
                 unsigned long n = tf->a0;
 
                 old_pid = current->pid;
@@ -263,9 +262,8 @@ void trap_handler(struct trap_frame *tf) {
 
                 need_schedule = 1;
                 break;
-            }
 
-            case SYS_WAIT: {
+            case SYS_WAIT: 
                 int target_pid = (int)tf->a0;
                 unsigned long status_uaddr = tf->a1;
 
@@ -325,9 +323,8 @@ void trap_handler(struct trap_frame *tf) {
                 advance_sepc = 0;
                 need_schedule = 1;
                 break;
-            }
 
-            case SYS_EXIT:{
+            case SYS_EXIT:
                 old_pid = current->pid;
 
                 print_str("[KERNEL] exit: pid=");
@@ -340,9 +337,8 @@ void trap_handler(struct trap_frame *tf) {
 
                 need_schedule = 1;
                 break;
-            }
-
-            case SYS_FILLBUF: {
+            
+            case SYS_FILLBUF: 
                 unsigned long value = 0x1122334455667788UL;
 
                 if (copyout((void *)tf->a0, &value, sizeof(value)) < 0) {
@@ -352,7 +348,15 @@ void trap_handler(struct trap_frame *tf) {
 
                 tf->a0 = 0;
                 break;
-            }
+        
+            case SYS_EXEC:
+                /*
+                 * Temporarily disabled:
+                 * switching image safely requires allocator-backed
+                 * non-inplace pagetable replacement.
+                 */
+                tf->a0 = -1;
+                break;
             
             default:
                 print_str("[KERNEL] unknown syscall, a7=");
