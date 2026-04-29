@@ -138,7 +138,7 @@ static int handle_user_page_fault(struct trap_frame *tf, unsigned long scause) {
         return -1;
     }
 
-    if (vm_ensure_user_access(current->pid,
+    if (vm_ensure_user_access(current->space,
                               current->user_pagetable,
                               fault_va,
                               access,

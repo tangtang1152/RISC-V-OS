@@ -8,7 +8,7 @@ static int ensure_user_access(unsigned long va, vm_access_t access, unsigned lon
         return -1;
     }
 
-    return vm_ensure_user_access(current->pid,
+    return vm_ensure_user_access(current->space,
                                  current->user_pagetable,
                                  va,
                                  access,

@@ -17,6 +17,8 @@
 typedef unsigned long pte_t;
 typedef unsigned long pagetable_t;
 
+typedef struct vm_space vm_space_t;
+
 typedef struct {
     unsigned long image_copy_size;    /* text + rodata + data */
     unsigned long eager_map_size;     /* eager mapped: text + rodata + data */
@@ -82,7 +84,9 @@ typedef enum {
 
 void vm_init(void);
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm);
-pagetable_t vm_make_user_pagetable(int pid, const user_image_desc *image);
+vm_space_t *vm_space_for_pid(int pid);
+void vm_space_reset(vm_space_t *space);
+pagetable_t vm_make_user_pagetable(vm_space_t *space, const user_image_desc *image);
 
 unsigned long vm_make_satp(pagetable_t pt);
 void vm_switch_to_user(pagetable_t pt);
@@ -113,7 +117,7 @@ int vm_translate_user(pagetable_t pt,
  *   if lazily mappable   -> map and then success
  *   else                 -> fail
  */
-int vm_ensure_user_access(int pid,
+int vm_ensure_user_access(vm_space_t *space,
                           pagetable_t pt,
                           unsigned long va,
                           vm_access_t access,

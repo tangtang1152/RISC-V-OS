@@ -66,7 +66,7 @@ static void proc_init_user_context_from_image(struct proc *p,
     p->tf.sp = image->layout.stack_top;
     p->tf.sepc = USER_TEXT_BASE + image->entry_offset;
 }
-static int proc_load_image(struct proc *p, int pid, const user_image_desc *image) {
+static int proc_load_image(struct proc *p, const user_image_desc *image) {
     if (!p) {
         return -1;
     }
@@ -75,7 +75,11 @@ static int proc_load_image(struct proc *p, int pid, const user_image_desc *image
         return -1;
     }
 
-    p->user_pagetable = vm_make_user_pagetable(pid, image);
+    if (!p->space) {
+        return -1;
+    }
+
+    p->user_pagetable = vm_make_user_pagetable(p->space, image);
     if (!p->user_pagetable) {
         return -1;
     }
@@ -97,6 +101,7 @@ static void proc_basic_init(struct proc *p, int pid) {
     p->exit_code = 0;
     p->wait_status_uaddr = 0;
 
+    p->space = vm_space_for_pid(pid);
     p->user_pagetable = 0;
 
     p->scratch.user_t0 = 0;
@@ -152,7 +157,7 @@ static int proc_create_with_image(struct proc *p, int pid, const user_image_desc
 
     proc_basic_init(p, pid);
 
-    if (proc_load_image(p, pid, image) < 0) {
+    if (proc_load_image(p, image) < 0) {
         return -1;
     }
 

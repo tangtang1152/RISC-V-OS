@@ -48,6 +48,7 @@ struct proc {
 
     int exit_code;
     unsigned long wait_status_uaddr;
+    vm_space_t *space;
     pagetable_t user_pagetable;
 };
 
