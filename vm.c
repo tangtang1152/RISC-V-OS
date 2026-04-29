@@ -29,7 +29,7 @@ struct vm_space {
         __attribute__((aligned(PAGE_SIZE)));
 };
 
-static struct vm_space proc_spaces[PROC_NUM];
+static struct vm_space proc_spaces[PROC_NUM][2];
 
 /*
  * Layout per process:
@@ -85,7 +85,22 @@ vm_space_t *vm_space_for_pid(int pid) {
         return 0;
     }
 
-    return &proc_spaces[pid];
+    return &proc_spaces[pid][0];
+}
+
+vm_space_t *vm_space_for_exec(int pid, vm_space_t *active) {
+    if (pid < 0 || pid >= PROC_NUM) {
+        return 0;
+    }
+
+    if (active == &proc_spaces[pid][0]) {
+        return &proc_spaces[pid][1];
+    }
+    if (active == &proc_spaces[pid][1]) {
+        return &proc_spaces[pid][0];
+    }
+
+    return 0;
 }
 
 void vm_space_reset(vm_space_t *space) {
@@ -246,7 +261,9 @@ void vm_switch_to_user(pagetable_t pt) {
 
 void vm_init(void) {
     for (unsigned long p = 0; p < PROC_NUM; p++) {
-        vm_space_reset(&proc_spaces[p]);
+        for (unsigned long slot = 0; slot < 2; slot++) {
+            vm_space_reset(&proc_spaces[p][slot]);
+        }
     }
 
     print_str("vm scaffold init done\n");

@@ -66,6 +66,17 @@ static void proc_init_user_context_from_image(struct proc *p,
     p->tf.sp = image->layout.stack_top;
     p->tf.sepc = USER_TEXT_BASE + image->entry_offset;
 }
+static void proc_clear_trap_frame(struct trap_frame *tf) {
+    if (!tf) {
+        return;
+    }
+
+    unsigned long *slot = (unsigned long *)tf;
+
+    for (unsigned long i = 0; i < sizeof(*tf) / sizeof(unsigned long); i++) {
+        slot[i] = 0;
+    }
+}
 static int proc_load_image(struct proc *p, const user_image_desc *image) {
     if (!p) {
         return -1;
@@ -333,10 +344,41 @@ const user_image_desc *proc_find_boot_image_by_id(int image_id) {
 }
 
 int proc_exec_current_image(int image_id) {
-    (void)image_id;
-    /*
-     * Temporarily disabled:
-     * safe exec needs allocator-backed pagetable handoff.
-     */
-    return -1;
+    const user_image_desc *image;
+    vm_space_t *new_space;
+    pagetable_t new_pagetable;
+
+    if (!current) {
+        return -1;
+    }
+
+    image = proc_find_boot_image(image_id);
+    if (proc_validate_image(image) < 0) {
+        return -1;
+    }
+
+    new_space = vm_space_for_exec(current->pid, current->space);
+    if (!new_space) {
+        return -1;
+    }
+
+    new_pagetable = vm_make_user_pagetable(new_space, image);
+    if (!new_pagetable) {
+        vm_space_reset(new_space);
+        return -1;
+    }
+
+    current->space = new_space;
+    current->user_pagetable = new_pagetable;
+
+    current->block_reason = PROC_BLOCK_NONE;
+    current->wait_pid = -1;
+    current->wait_status_uaddr = 0;
+    current->wakeup_tick = 0;
+    current->exit_code = 0;
+
+    proc_clear_trap_frame(&current->tf);
+    proc_init_user_context_from_image(current, image);
+
+    return 0;
 }
