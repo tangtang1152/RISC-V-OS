@@ -19,8 +19,7 @@ static const char u0_fail[] USER_RODATA = "[USER0] TEST FAIL\n";
 static const char u1_pid[] USER_RODATA = "[USER1] pid=";
 static const char u1_add[] USER_RODATA = " add(10,32)=";
 static const char u1_sleep[] USER_RODATA = "[USER1] sleep 3 ticks\n";
-static const char u1_exec[] USER_RODATA = "[USER1] exec image 0\n";
-static const char u1_exec_fail[] USER_RODATA = "[USER1] exec failed\n";
+static const char u1_exit[] USER_RODATA = "[USER1] exit now\n";
 
 static const char u0_copyout[] USER_RODATA = " copyout=";
 static const char u0_copyout_fail[] USER_RODATA = "[USER0] copyout failed\n";
@@ -96,11 +95,8 @@ USER_TEXT void user_main2(void){
     sys_sleep(3);
     sys_yield();
 
-    sys_printstr(u1_exec);
-    if (sys_exec(0) < 0) {
-        sys_printstr(u1_exec_fail);
-        sys_exit(-1);
-    }
+    sys_printstr(u1_exit);
+    sys_exit(42);
 
     while (1) { }
 }

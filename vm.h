@@ -85,7 +85,6 @@ typedef enum {
 void vm_init(void);
 void vm_map_page(pagetable_t pt, unsigned long va, unsigned long pa, unsigned long perm);
 vm_space_t *vm_space_for_pid(int pid);
-vm_space_t *vm_space_for_exec(int pid, vm_space_t *active);
 void vm_space_reset(vm_space_t *space);
 pagetable_t vm_make_user_pagetable(vm_space_t *space, const user_image_desc *image);
 

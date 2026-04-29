@@ -197,7 +197,6 @@ void trap_handler(struct trap_frame *tf) {
     if (scause == SCAUSE_ECALL_U) {   // Environment call from U-mode
         int advance_sepc = 1;
         int need_schedule = 0;
-        int skip_sepc_update = 0;
         int old_pid = -1;
 
         switch (tf->a7) {
@@ -351,12 +350,7 @@ void trap_handler(struct trap_frame *tf) {
                 break;
         
             case SYS_EXEC:
-                if (proc_exec_current_image((int)tf->a0) < 0) {
-                    tf->a0 = -1;
-                    break;
-                }
-
-                skip_sepc_update = 1;
+                tf->a0 = proc_exec_current_image((int)tf->a0);
                 break;
             
             default:
@@ -368,12 +362,10 @@ void trap_handler(struct trap_frame *tf) {
             
         }
 
-        if (!skip_sepc_update) {
-            if (advance_sepc)
-                tf->sepc = r_sepc() + 4;
-            else
-                tf->sepc = r_sepc();
-        }
+        if (advance_sepc)
+            tf->sepc = r_sepc() + 4;
+        else
+            tf->sepc = r_sepc();
 
         if (need_schedule) {
             schedule();

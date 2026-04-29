@@ -3,6 +3,7 @@
 #include "sbi.h"
 #include "riscv.h"
 #include "memlayout.h"
+#include "kalloc.h"
 
 extern char __userimage_start[];
 extern char __userimage_end[];
@@ -18,18 +19,17 @@ extern char __userbss_end[];
 #define USER_PT_PAGE_COUNT (5 + KERNEL_L0_TABLES)
 #define USER_IMAGE_PAGE_COUNT (USER_IMAGE_MAX_SIZE / PAGE_SIZE)
 #define USER_STACK_PAGE_COUNT (USER_STACK_SIZE / PAGE_SIZE)
-#define VM_SPACE_PAGE_COUNT (USER_PT_PAGE_COUNT + USER_IMAGE_PAGE_COUNT + USER_STACK_PAGE_COUNT)
+#define VM_SPACE_MAX_OWNED_PAGES (USER_PT_PAGE_COUNT + USER_IMAGE_PAGE_COUNT + USER_STACK_PAGE_COUNT)
 
 struct vm_space {
     pagetable_t root;
-    unsigned long next_page;
+    unsigned long owned_page_pa[VM_SPACE_MAX_OWNED_PAGES];
+    unsigned long owned_page_count;
     unsigned long image_page_pa[USER_IMAGE_PAGE_COUNT];
     unsigned long stack_page_pa;
-    unsigned char pages[VM_SPACE_PAGE_COUNT][PAGE_SIZE]
-        __attribute__((aligned(PAGE_SIZE)));
 };
 
-static struct vm_space proc_spaces[PROC_NUM][2];
+static struct vm_space proc_spaces[PROC_NUM];
 
 /*
  * Layout per process:
@@ -85,22 +85,7 @@ vm_space_t *vm_space_for_pid(int pid) {
         return 0;
     }
 
-    return &proc_spaces[pid][0];
-}
-
-vm_space_t *vm_space_for_exec(int pid, vm_space_t *active) {
-    if (pid < 0 || pid >= PROC_NUM) {
-        return 0;
-    }
-
-    if (active == &proc_spaces[pid][0]) {
-        return &proc_spaces[pid][1];
-    }
-    if (active == &proc_spaces[pid][1]) {
-        return &proc_spaces[pid][0];
-    }
-
-    return 0;
+    return &proc_spaces[pid];
 }
 
 void vm_space_reset(vm_space_t *space) {
@@ -108,8 +93,13 @@ void vm_space_reset(vm_space_t *space) {
         return;
     }
 
+    for (unsigned long i = 0; i < space->owned_page_count; i++) {
+        kfree_page((void *)space->owned_page_pa[i]);
+        space->owned_page_pa[i] = 0;
+    }
+
     space->root = 0;
-    space->next_page = 0;
+    space->owned_page_count = 0;
     space->stack_page_pa = 0;
 
     for (unsigned long i = 0; i < USER_IMAGE_PAGE_COUNT; i++) {
@@ -118,18 +108,18 @@ void vm_space_reset(vm_space_t *space) {
 }
 
 static void *vm_space_alloc_page(vm_space_t *space) {
-    unsigned char *page;
+    void *page;
 
-    if (!space || space->next_page >= VM_SPACE_PAGE_COUNT) {
+    if (!space || space->owned_page_count >= VM_SPACE_MAX_OWNED_PAGES) {
         return 0;
     }
 
-    page = space->pages[space->next_page++];
-
-    for (unsigned long i = 0; i < PAGE_SIZE; i++) {
-        page[i] = 0;
+    page = kalloc_page();
+    if (!page) {
+        return 0;
     }
 
+    space->owned_page_pa[space->owned_page_count++] = (unsigned long)page;
     return page;
 }
 
@@ -261,9 +251,7 @@ void vm_switch_to_user(pagetable_t pt) {
 
 void vm_init(void) {
     for (unsigned long p = 0; p < PROC_NUM; p++) {
-        for (unsigned long slot = 0; slot < 2; slot++) {
-            vm_space_reset(&proc_spaces[p][slot]);
-        }
+        vm_space_reset(&proc_spaces[p]);
     }
 
     print_str("vm scaffold init done\n");
@@ -400,7 +388,7 @@ static int vm_map_kernel_window(pagetable_t pt,
 /*
  * Phase-1 static image loader control flow:
  *   1) validate image descriptor and source
- *   2) allocate/copy file-backed image pages from the vm_space page pool
+ *   2) allocate/copy file-backed image pages from the global page allocator
  *   3) eagerly map text / rodata / data
  *   4) map user stack
  *   5) map shared kernel window
@@ -415,6 +403,7 @@ pagetable_t vm_make_user_pagetable(vm_space_t *space, const user_image_desc *ima
     pte_t *l0_stack;
     pte_t *l1_kernel;
     pte_t *l0_kernel[KERNEL_L0_TABLES];
+    const user_layout_t *layout;
 
     if (!space) {
         return 0;
@@ -422,18 +411,6 @@ pagetable_t vm_make_user_pagetable(vm_space_t *space, const user_image_desc *ima
 
     vm_space_reset(space);
 
-    l2 = (pte_t *)vm_space_alloc_page(space);
-    l1_low = (pte_t *)vm_space_alloc_page(space);
-    l0_image = (pte_t *)vm_space_alloc_page(space);
-    l0_stack = (pte_t *)vm_space_alloc_page(space);
-    l1_kernel = (pte_t *)vm_space_alloc_page(space);
-
-    if (!l2 || !l1_low || !l0_image || !l0_stack || !l1_kernel) {
-        print_str("[KERNEL] failed to allocate base user page tables\n");
-        return 0;
-    }
-
-    const user_layout_t *layout;
     if (!image) {
         return 0;
     }
@@ -452,6 +429,17 @@ pagetable_t vm_make_user_pagetable(vm_space_t *space, const user_image_desc *ima
         return 0;
     }
 
+    l2 = (pte_t *)vm_space_alloc_page(space);
+    l1_low = (pte_t *)vm_space_alloc_page(space);
+    l0_image = (pte_t *)vm_space_alloc_page(space);
+    l0_stack = (pte_t *)vm_space_alloc_page(space);
+    l1_kernel = (pte_t *)vm_space_alloc_page(space);
+
+    if (!l2 || !l1_low || !l0_image || !l0_stack || !l1_kernel) {
+        print_str("[KERNEL] failed to allocate base user page tables\n");
+        goto fail;
+    }
+
     l2[vpn2(USER_BASE)] = pa_to_pte((unsigned long)l1_low) | PTE_V;
     l1_low[vpn1(USER_TEXT_BASE)] = pa_to_pte((unsigned long)l0_image) | PTE_V;
     l1_low[vpn1(layout->stack_bottom)] = pa_to_pte((unsigned long)l0_stack) | PTE_V;
@@ -460,7 +448,7 @@ pagetable_t vm_make_user_pagetable(vm_space_t *space, const user_image_desc *ima
         l0_kernel[t] = (pte_t *)vm_space_alloc_page(space);
         if (!l0_kernel[t]) {
             print_str("[KERNEL] failed to allocate kernel window page tables\n");
-            return 0;
+            goto fail;
         }
     }
 
@@ -468,20 +456,24 @@ pagetable_t vm_make_user_pagetable(vm_space_t *space, const user_image_desc *ima
 
     if (vm_map_image_eager(space, (pagetable_t)l2, image) < 0) {
         print_str("[KERNEL] failed to map eager user image segments\n");
-        return 0;
+        goto fail;
     }
 
     if (vm_map_user_stack(space, (pagetable_t)l2, layout) < 0) {
         print_str("[KERNEL] failed to map user stack\n");
-        return 0;
+        goto fail;
     }
 
     if (vm_map_kernel_window((pagetable_t)l2, l2, l1_kernel, l0_kernel) < 0) {
         print_str("[KERNEL] failed to map kernel window\n");
-        return 0;
+        goto fail;
     }
 
     return (pagetable_t)l2;
+
+fail:
+    vm_space_reset(space);
+    return 0;
 }
 
 int vm_translate_user(pagetable_t pt,

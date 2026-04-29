@@ -67,4 +67,7 @@ SECTIONS
         *(.bss.stack)
         *(COMMON)
     }
+
+    . = ALIGN(4096);
+    __kernel_end = .;
 }

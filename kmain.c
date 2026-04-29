@@ -3,6 +3,7 @@
 #include "proc.h"
 #include "timer.h"
 #include "vm.h"
+#include "kalloc.h"
 
 extern void kernel_entry(void);
 extern void user_return(void);
@@ -12,6 +13,7 @@ void kmain(void) {
 
     print_str("kmain enter\n");
 
+    kalloc_init();
     vm_init();
     proc_init();
 
