@@ -1,0 +1,37 @@
+# RISC-V-OS 项目规则
+
+## 记忆协议
+- 每次会话开始：先查 MemPalace (`mempalace_status` / `mempalace_search`)
+- 回复前：如果涉及项目已有决策，先搜索记忆，不靠猜测
+- 每次会话结束：写日记到 `wing_riscv-os/progress`
+- 每个决策：写到 `wing_riscv-os/decision`（原因 + 方案 + 不选方案的理由）
+
+## 代码修改规范
+- 修改后不创建 git commit 和 git add 不要自己提交
+- 提供 commit message 简洁但明确有信息量的一部分 + 较详细的解释
+
+## 编译纪律
+- 所有代码修改后：必须先 `make check`（编译验证），确认编译通过后才算完成修改
+- 不通过就修，修到通过为止，不跳到下一步
+- make 报错时：读取所有行，先修第一个错误（后面的可能是级联错误），修完重试 make
+- 排除误读产物：不读取 .o/.bin/.elf/.d 文件
+- 所有 make 命令在 WSL 环境执行（前缀 `wsl -e sh -c "cd /mnt/d/dev/os/riscv && ..."`）
+- 运行时测试用 `make test`（5 秒超时自动退出），不用 `make run`（无限等待）
+- 运行时日志自动写入 `qemu.log`，用 `read_file` 或 `search_files` 分析
+- 需反汇编时用 `riscv64-unknown-elf-objdump -d kernel.elf`
+- 调试完毕后清理产物：`make clean`
+
+## 长任务 checkpoint
+- 预期需要 3 轮以上改代码的任务：每完成一个子步骤，写中间进度到 `wing_riscv-os/progress`
+- 记录当前进度、已完成的文件改动、下一步计划
+- 如果被中断，下个会话从最后一个 checkpoint 恢复
+
+## 工作流
+- 用户问 "接下来做什么" / "下面干什么"：只提供分析 + 权衡 + 建议，不改代码。用户做决定。
+- 大代码步骤后：维护一个 persistent step log，说明新代码的组织、理由、涉及的文件、如何阅读、为什么改动
+- 跨会话 handoff：频繁通过 MemPalace 记录决策/偏好/修正
+
+## 当前开发焦点
+- RISC-V OS kernel (RISC-V-OS)
+- 已实现：kalloc, proc, vm, trap, uaccess, timer, SBI
+- 当前状态见 MemPalace `wing_riscv-os/progress`

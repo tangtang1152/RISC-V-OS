@@ -21,5 +21,28 @@ run: kernel.elf
 		-bios default \
 		-kernel kernel.elf
 
+# Run with timeout + log capture for automated testing
+test: kernel.elf
+	timeout 5 qemu-system-riscv64 \
+		-machine virt \
+		-nographic \
+		-bios default \
+		-kernel kernel.elf \
+		-serial file:qemu.log || true; \
+		echo "=== QEMU exited ==="
+
+# Run and tee output to file (human + log)
+run-log: kernel.elf
+	qemu-system-riscv64 \
+		-machine virt \
+		-nographic \
+		-bios default \
+		-kernel kernel.elf 2>&1 | tee qemu.log
+
+# Quick check: compile only, no run
+check:
+	$(CC) $(CFLAGS) start.S kmain.c sbi.c trap.c trap.S user.c proc.c timer.c vm.c uaccess.c kalloc.c $(LDFLAGS) -o kernel.elf
+	@echo "=== check passed ==="
+
 clean:
-	rm -f kernel.elf kernel.bin
+	rm -f kernel.elf kernel.bin qemu.log
