@@ -2,6 +2,7 @@
 #include "riscv.h"
 #include "sbi.h"
 #include "memlayout.h"
+#include "vm.h"
 
 extern void user_entry(void);
 extern void user_entry2(void);
@@ -332,12 +333,70 @@ const user_image_desc *proc_find_boot_image_by_id(int image_id) {
     return proc_find_boot_image(image_id);
 }
 
+/*
+ * proc_exec_current_image: replace current process's address space and
+ * execution context with a new boot image. Used by sys_exec.
+ *
+ * vm_make_user_pagetable internally calls vm_space_reset (free old pages
+ * via kfree_page) and vm_space_alloc_page (allocate new pages via
+ * kalloc_page).  With FIFO kalloc, freed pages go to the tail and are
+ * not immediately re-allocated, so the active SATP stays valid during
+ * the build.
+ *
+ * After building the new pagetable, we set sepc and sp to the new
+ * image's entry point / stack top.  The trap handler will use these
+ * values on return to user mode.
+ *
+ * Returns 0 on success, -1 on failure (current process unchanged).
+ */
 int proc_exec_current_image(int image_id) {
-    (void)image_id;
-    /*
-     * Temporarily disabled:
-     * safe exec now waits for global page-backed vm_space replacement
-     * and owned-page release semantics.
-     */
-    return -1;
+    const user_image_desc *image;
+    pagetable_t new_pt;
+
+    if (!current) {
+        return -1;
+    }
+
+    image = proc_find_boot_image(image_id);
+    if (!image) {
+        print_str("[KERNEL] exec: image not found, id=");
+        print_hex((unsigned long)image_id);
+        print_str("\n");
+        return -1;
+    }
+
+    if (proc_validate_image(image) < 0) {
+        print_str("[KERNEL] exec: invalid image\n");
+        return -1;
+    }
+
+    /* vm_make_user_pagetable frees old pages and builds new pagetable.
+     * With FIFO kalloc, old freed pages are not immediately reused. */
+    new_pt = vm_make_user_pagetable(current->space, image);
+    if (!new_pt) {
+        print_str("[KERNEL] exec: failed to rebuild page table\n");
+        return -1;
+    }
+
+    current->user_pagetable = new_pt;
+
+    /* Set new entry point and stack. */
+    current->tf.sepc = USER_TEXT_BASE + image->entry_offset;
+    current->tf.sp = image->layout.stack_top;
+
+    print_str("[KERNEL] exec: pid=");
+    print_hex((unsigned long)current->pid);
+    print_str(" -> image=");
+    if (image->name) {
+        print_str(image->name);
+    } else {
+        print_hex((unsigned long)image_id);
+    }
+    print_str(" sepc=");
+    print_hex(current->tf.sepc);
+    print_str(" sp=");
+    print_hex(current->tf.sp);
+    print_str("\n");
+
+    return 0;
 }

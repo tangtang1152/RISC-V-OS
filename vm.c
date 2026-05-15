@@ -469,6 +469,20 @@ pagetable_t vm_make_user_pagetable(vm_space_t *space, const user_image_desc *ima
         goto fail;
     }
 
+    /* DEBUG: verify eager mapping at 0x1000 */
+    {
+        pte_t *dbg_pte = vm_walk((pagetable_t)l2, 0x1000);
+        print_str("[DEBUG] vm_make: walk(0x1000)=");
+        if (dbg_pte) {
+            print_hex((unsigned long)*dbg_pte);
+            print_str(" V=");
+            print_hex((unsigned long)(*dbg_pte & PTE_V));
+        } else {
+            print_str("NULL");
+        }
+        print_str("\n");
+    }
+
     return (pagetable_t)l2;
 
 fail:

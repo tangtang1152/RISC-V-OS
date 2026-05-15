@@ -1,11 +1,5 @@
 # RISC-V-OS 项目规则
 
-## 记忆协议
-- 每次会话开始：先查 MemPalace (`mempalace_status` / `mempalace_search`)
-- 回复前：如果涉及项目已有决策，先搜索记忆，不靠猜测
-- 每次会话结束：写日记到 `wing_riscv-os/progress`
-- 每个决策：写到 `wing_riscv-os/decision`（原因 + 方案 + 不选方案的理由）
-
 ## 代码修改规范
 - 修改后不创建 git commit 和 git add 不要自己提交
 - 提供 commit message 简洁但明确有信息量的一部分 + 较详细的解释
@@ -17,7 +11,8 @@
 - 排除误读产物：不读取 .o/.bin/.elf/.d 文件
 - 所有 make 命令在 WSL 环境执行（前缀 `wsl -e sh -c "cd /mnt/d/dev/os/riscv && ..."`）
 - 运行时测试用 `make test`（5 秒超时自动退出），不用 `make run`（无限等待）
-- 运行时日志自动写入 `qemu.log`，用 `read_file` 或 `search_files` 分析
+- 运行时日志自动写入 `qemu-int.log`，用 `read_file` 或 `search_files` 分析
+- `qemu-int.log`用命令`qemu-system-riscv64 \ -machine virt \ -nographic \ -bios default \ -kernel kernel.elf \ -d int \ 2> qemu-int.log` 可生成
 - 需反汇编时用 `riscv64-unknown-elf-objdump -d kernel.elf`
 - 调试完毕后清理产物：`make clean`
 

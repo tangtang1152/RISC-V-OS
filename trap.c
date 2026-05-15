@@ -198,6 +198,7 @@ void trap_handler(struct trap_frame *tf) {
         int advance_sepc = 1;
         int need_schedule = 0;
         int old_pid = -1;
+        int exec_sepc_set = 0;
 
         switch (tf->a7) {
             case SYS_PUTCHAR:
@@ -349,9 +350,21 @@ void trap_handler(struct trap_frame *tf) {
                 tf->a0 = 0;
                 break;
         
-            case SYS_EXEC:
-                tf->a0 = proc_exec_current_image((int)tf->a0);
+            case SYS_EXEC: {
+                long result = proc_exec_current_image((int)tf->a0);
+                tf->a0 = result;
+                /*
+                 * On success: proc_exec_current_image already set
+                 * current->tf.sepc to the new entry point, so do NOT
+                 * advance sepc (which would overwrite with old ecall+4).
+                 * On failure: advance sepc so the caller sees error return.
+                 */
+                if (result == 0) {
+                    advance_sepc = 0;
+                    exec_sepc_set = 1;
+                }
                 break;
+            }
             
             default:
                 print_str("[KERNEL] unknown syscall, a7=");
@@ -362,10 +375,12 @@ void trap_handler(struct trap_frame *tf) {
             
         }
 
-        if (advance_sepc)
-            tf->sepc = r_sepc() + 4;
-        else
-            tf->sepc = r_sepc();
+        if (!exec_sepc_set) {
+            if (advance_sepc)
+                tf->sepc = r_sepc() + 4;
+            else
+                tf->sepc = r_sepc();
+        }
 
         if (need_schedule) {
             schedule();
